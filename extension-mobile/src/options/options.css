@@ -1,0 +1,32 @@
+:root{--void:#000;--panel:#070707;--card:#0e0e0e;--line:#262626;--line2:#3a3a3a;
+  --white:#fff;--ash:#c6c6c6;--steel:#808080;
+  --mono:"Space Mono",ui-monospace,"Courier New",monospace;--serif:"Playfair Display",Georgia,serif}
+*{box-sizing:border-box}
+body{margin:0;padding:28px 20px 64px;background:var(--void);color:var(--white);
+  font-family:var(--mono);font-size:13px;line-height:1.6}
+.wrap{max-width:660px;margin:0 auto}
+h1{font-family:var(--serif);font-weight:400;font-size:30px;margin:0 0 6px}
+.sub{color:var(--steel);font-size:12px;margin-bottom:30px}
+h2{font-family:var(--serif);font-weight:400;font-size:19px;margin:34px 0 12px;
+  padding-top:20px;border-top:1px solid var(--line)}
+label{display:block;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--steel);margin:14px 0 6px}
+input,textarea,select{width:100%;background:var(--card);color:var(--white);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  font-family:var(--mono);font-size:12.5px;outline:none}
+input:focus,textarea:focus,select:focus{border-color:var(--white)}
+textarea{resize:vertical;min-height:78px;line-height:1.6}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.hint{color:var(--steel);font-size:11px;margin-top:6px;line-height:1.55}
+.row{display:flex;align-items:center;gap:9px;margin:12px 0}
+.row input[type=checkbox]{width:auto}
+button{border-radius:999px;padding:12px 26px;cursor:pointer;font-family:var(--mono);
+  font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  background:transparent;border:1px solid var(--line2);color:var(--ash);transition:.18s}
+button:hover{border-color:var(--white);color:var(--white)}
+button.primary{background:var(--white);color:#000;border-color:var(--white)}
+button.primary:hover{opacity:.85}
+.bar{position:sticky;bottom:0;background:linear-gradient(transparent,var(--void) 26%);
+  padding:22px 0 6px;display:flex;gap:10px;align-items:center}
+.saved{color:var(--white);font-size:11px}

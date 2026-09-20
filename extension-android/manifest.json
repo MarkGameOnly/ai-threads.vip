@@ -1,0 +1,85 @@
+{
+    "manifest_version": 3,
+    "name": "AI Threads VIP (Android)",
+    "version": "5.6.0",
+    "description": "AI Threads VIP — рост в Threads: AI-комментарии, автопостинг, поиск клиентов, директ и аналитика залетевших постов. Русский и English. / Growth for Threads: AI replies, scheduling, client hunter, DMs and viral post analytics.",
+    "permissions": [
+        "storage",
+        "unlimitedStorage",
+        "scripting",
+        "tabs",
+        "notifications",
+        "alarms"
+    ],
+    "host_permissions": [
+        "https://*.threads.com/*",
+        "https://*.threads.net/*",
+        "https://api.telegram.org/*",
+        "https://ai-threads.vip/*"
+    ],
+    "background": {
+        "service_worker": "src/background/service-worker.js",
+        "type": "module"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://*.threads.com/*",
+                "https://*.threads.net/*"
+            ],
+            "js": [
+                "src/content/threads-resolve.js",
+                "src/content/threads-dom.js",
+                "src/content/threads-aim.js",
+                "src/content/threads-find.js",
+                "src/content/threads-engine.js",
+                "src/content/threads-rpc.js",
+                "src/content/sheet.js",
+                "src/content/threads-panel.js"
+            ],
+            "css": [
+                "src/content/panel.css"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "https://ai-threads.vip/x*",
+                "https://www.ai-threads.vip/x*"
+            ],
+            "js": [
+                "src/content/connect-bridge.js"
+            ],
+            "run_at": "document_end"
+        }
+    ],
+    "action": {
+        "default_popup": "src/popup/popup.html",
+        "default_title": "AI Threads",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "32": "icons/icon32.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
+    },
+    "options_page": "src/options/options.html",
+    "icons": {
+        "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "src/sidepanel/*",
+                "icons/*"
+            ],
+            "matches": [
+                "https://*.threads.com/*",
+                "https://*.threads.net/*"
+            ]
+        }
+    ]
+}

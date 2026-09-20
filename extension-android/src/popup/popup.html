@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="top"><div class="logo"></div><div class="title">AI THREADS <b>VIP</b></div></div>
+
+  <!-- ЭКРАН 1: вход. Показывается, пока кабинет не подключён. -->
+  <section id="login" class="screen hidden">
+    <p class="lead">Вход по ключу из бота. Два поля — и всё.</p>
+
+    <button id="paste" class="ghost wide">📋 Вставить из буфера</button>
+
+    <label>Telegram ID</label>
+    <input id="tgUserId" inputmode="numeric" autocomplete="off"
+           autocapitalize="off" spellcheck="false" placeholder="123456789" />
+
+    <label>Ключ активации</label>
+    <input id="pin" autocomplete="off" autocapitalize="characters"
+           spellcheck="false" placeholder="TAI-XXXX-XXXX-XXXX" />
+
+    <button id="go" class="primary wide">Войти</button>
+    <div id="msg" class="msg"></div>
+
+    <p class="hint">
+      Скопируйте сообщение «Кабинет» в боте
+      <a href="https://t.me/aithreads50_bot" target="_blank">@aithreads50_bot</a>
+      целиком и нажмите «Вставить из буфера» — ID и ключ подставятся сами.
+    </p>
+  </section>
+
+  <!-- ЭКРАН 2: подключено. Только действия, ничего лишнего. -->
+  <section id="home" class="screen hidden">
+    <div class="badge"><span id="plan">—</span><span id="gens" class="gens"></span></div>
+    <button id="chat" class="primary wide">💬 Открыть панель</button>
+    <button id="threads" class="ghost wide">🧵 Открыть Threads</button>
+    <button id="opts" class="ghost wide">⚙️ Настройки</button>
+    <button id="channel" class="ghost wide">📣 Канал и обновления</button>
+    <button id="out" class="link">Выйти из кабинета</button>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
