@@ -339,26 +339,60 @@ async function runTool(name, args) {
 }
 
 /* ---------------- ОХОТНИК ---------------- */
+/**
+ * Запуск «Охотника».
+ *
+ * Карточка прогресса ОБЯЗАНА получить финальное состояние при любом
+ * исходе. Раньше вызов шёл без try/catch (а из обработчика кнопки — ещё
+ * и без await): первая же ошибка модели на шаге отбора лидов уходила в
+ * unhandled rejection, карточка навсегда оставалась «идёт», и программа
+ * выглядела зависшей именно там, где её застала ошибка.
+ */
 async function runHunterProgram(cfg) {
   if (!isConnected()) { needConnect(); return; }
   if (!cfg.product) { openHunter(); return; }
   stopFlag = false; pauseFlag = false;
   botMsg("Запускаю программу «AI-охотник за клиентами».");
-  const card = progCard("AI-охотник за клиентами", [
-    "Построить поисковые гипотезы",
-    "Собрать поисковую выдачу по всем запросам",
-    "Оставить свежие уникальные возможности",
-    "Строгая AI-квалификация лидов",
-    "Начать полезные диалоги в выбранных ветках",
+  const card = progCard(I18N.t("hunt_title", "🕵️ AI-охотник за клиентами")
+                          .replace(/^🕵️\s*/, ""), [
+    I18N.t("hunt_s1", "Построить поисковые гипотезы"),
+    I18N.t("hunt_s2", "Собрать главную ленту и поисковую выдачу"),
+    I18N.t("hunt_s3", "Оставить свежие уникальные возможности"),
+    I18N.t("hunt_s4", "Строгая AI-квалификация лидов"),
+    I18N.t("hunt_s5", "Начать полезные диалоги в выбранных ветках"),
   ]);
-  const res = await T.runHunter(cfg, {
-    step: card.step, log: card.log, isStopped: () => stopFlag,
-    waitIfPaused,
-  });
-  if (res.stopped) { card.finish("остановлено"); botMsg("Программа остановлена."); return; }
+  let res;
+  try {
+    res = await T.runHunter(cfg, {
+      step: card.step, log: card.log, isStopped: () => stopFlag,
+      waitIfPaused,
+    });
+  } catch (e) {
+    card.log("✕ " + (e?.message || e));
+    card.finish("ошибка");
+    handleErr(e);
+    return;
+  }
+  res = res || { ok: false, error: "программа не вернула результат" };
+
+  if (res.stopped) {
+    card.finish("остановлено");
+    botMsg(`Программа остановлена. Лидов найдено: ${res.leadsCount || 0}, ` +
+           `диалогов начато: ${res.commented || 0}.`);
+    return;
+  }
   if (!res.ok) { card.finish("ошибка"); errMsg(res.error || "не удалось"); return; }
   card.finish("готово");
-  botMsg(`Готово. Гипотез: ${res.queries.length}, лидов: ${res.leadsCount}, диалогов начато: ${res.commented}. Клиенты — во вкладке «Клиенты».`);
+  if (!res.leadsCount) {
+    botMsg(`Готово. Гипотез: ${res.queries?.length || 0}, но подходящих клиентов не нашлось. ` +
+           (res.note ? res.note : "Смягчи фильтры охотника или опиши продукт конкретнее."));
+    return;
+  }
+  botMsg(`Готово. Гипотез: ${res.queries.length}, лидов: ${res.leadsCount}, ` +
+         `диалогов начато: ${res.commented}` +
+         (res.failed ? `, не вышло: ${res.failed}` : "") +
+         (res.skipped ? `, пропущено: ${res.skipped}` : "") +
+         `. Клиенты — во вкладке «Клиенты».`);
 }
 
 /* ---------------- КОММЕНТИНГ (панель) ---------------- */
@@ -1306,7 +1340,9 @@ function wire() {
     if (!hunterCfg.product) { $("h_product").focus(); return; }
     await chrome.runtime.sendMessage({ type: "SET_SETTINGS", patch: { hunter: hunterCfg } });
     closeHunter(); switchTab("chat");
-    runHunterProgram({ ...hunterCfg });
+    // .catch обязателен: без него любая ошибка внутри программы была
+    // unhandled rejection — ни сообщения, ни завершения карточки.
+    runHunterProgram({ ...hunterCfg }).catch(handleErr);
   });
 }
 

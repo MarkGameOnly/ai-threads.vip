@@ -1,7 +1,7 @@
 // tools.js — инструменты, которыми пользуется чат-мозг. Все работают через активную вкладку Threads.
 import { fitComment, lengthRule } from "../shared/comment-format.js";
 import { ensureThreadsTab, navigate, rpc, rpcSafe, ensureContentScript, sleep } from "./tab-control.js";
-import { chat as directChat } from "../shared/ai.js";
+import { chat as directChat, GensOutError, AIError } from "../shared/ai.js";
 
 /**
  * Событие для панели здоровья/уведомлений в боте — см. shared/ext-events.js.
@@ -16,6 +16,27 @@ function reportEvent(kind, payload = {}) {
 }
 
 /**
+ * Страховочный дедлайн поверх любого ожидания.
+ *
+ * Таймаут внутри ai.js закрывает подвисший fetch, но мост «панель → фон»
+ * — отдельная точка отказа: если service worker умрёт ровно в момент
+ * ответа, промис sendMessage может не завершиться ни успехом, ни
+ * ошибкой. Для генерации это безопасно: повторный запрос ничего не
+ * ломает, а вот бесконечное ожидание останавливает всю программу.
+ */
+function withDeadline(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, rej) => {
+      timer = setTimeout(
+        () => rej(new AIError(`${label} не ответил за ${Math.round(ms / 1000)}с`, 0, { retryable: true })),
+        ms);
+    }),
+  ]);
+}
+
+/**
  * Генерация через фоновый service worker.
  *
  * Прямой fetch из side-panel иногда падает с «Failed to fetch» (именно это
@@ -23,15 +44,51 @@ function reportEvent(kind, payload = {}) {
  * проблем не имеет; прямой вызов оставлен запасным путём.
  */
 async function chat(messages, opts = {}) {
+  const budget = (Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 90000) *
+                 ((Number.isFinite(Number(opts.retries)) ? Math.max(0, Number(opts.retries)) : 2) + 1) + 20000;
   try {
-    const r = await chrome.runtime.sendMessage({ type: "AI_CHAT", messages, opts });
+    const r = await withDeadline(
+      chrome.runtime.sendMessage({ type: "AI_CHAT", messages, opts }), budget, "AI Threads");
     if (r && r.ok && typeof r.text === "string") return r.text;
-    if (r && r.error) throw new Error(r.error);
+    if (r && r.error) throw reviveError(r);
   } catch (e) {
+    // Ошибку САМОЙ модели (кончились генерации, 429, 403) пробрасываем как
+    // есть: запасной прямой путь упрётся ровно в то же самое, только
+    // потратит ещё один таймаут. Повторяем локально лишь обрыв канала
+    // между панелью и фоном.
+    if (e instanceof GensOutError || e instanceof AIError || e?.name === "GensOutError") throw e;
     const m = String(e && e.message || e);
-    if (!/Failed to fetch|Could not establish|receiving end|message port/i.test(m)) throw e;
+    if (!/Failed to fetch|Could not establish|receiving end|message port|Extension context/i.test(m)) throw e;
   }
   return directChat(messages, opts);
+}
+
+/** Восстановить класс ошибки, потерянный при передаче через sendMessage. */
+function reviveError(r) {
+  if (r.kind === "GensOutError") return new GensOutError(r.buyUrl || "");
+  if (r.kind === "AIError") return new AIError(r.error, r.status, { retryable: !!r.retryable });
+  const e = new Error(r.error);
+  e.status = r.status;
+  return e;
+}
+
+/**
+ * Сообщение фону, которое не роняет прогон.
+ *
+ * MV3-фон засыпает, а при перезагрузке расширения канал к нему умирает
+ * навсегда. Прежний код писал `(await chrome.runtime.sendMessage(...)).counters`
+ * — и на мёртвом канале это не «ошибка фона», а исключение прямо посреди
+ * цикла охотника: программа обрывалась без единой строки в логе.
+ */
+async function bg(msg, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await chrome.runtime.sendMessage(msg);
+      if (r) return r;
+    } catch { /* фон спит или контекст перезагружен — пробуем ещё */ }
+    if (i < tries - 1) await sleep(300 + i * 500);
+  }
+  return { ok: false, _bgFailed: true };
 }
 import { sendMessage } from "../shared/telegram.js";
 
@@ -41,14 +98,57 @@ const fill = (tpl, v) => tpl.replace(/\{(\w+)\}/g, (_, k) => (k in v ? v[k] : `{
 import { getSettings } from "../shared/storage.js";
 import * as I18N from "../shared/i18n.js";
 import { withinActiveHours, nextGapSec, maybeCooldown, safeDailyCap } from "../shared/safemode.js";
-async function savePosts(posts) { await chrome.runtime.sendMessage({ type: "SAVE_POSTS", posts }); }
-async function saveLeads(leads) { await chrome.runtime.sendMessage({ type: "SAVE_LEADS", leads }); }
+async function savePosts(posts) { await bg({ type: "SAVE_POSTS", posts }); }
+async function saveLeads(leads) { await bg({ type: "SAVE_LEADS", leads }); }
 
+/**
+ * Достать JSON из ответа модели.
+ *
+ * Прежняя версия брала одну жадную регулярку «от первой скобки до
+ * последней». Стоило модели добавить фразу до или после объекта (а на
+ * шаге квалификации она это делает регулярно), как JSON.parse падал,
+ * и совершенно нормальный лид молча терялся: `is_lead` не прочитан —
+ * значит не клиент. Теперь пробуем по очереди: чистый текст, блок ```json,
+ * затем первый СБАЛАНСИРОВАННЫЙ объект/массив.
+ */
 function safeJson(t) {
   if (!t) return null;
-  const m = t.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
+  const raw = String(t).trim();
+
+  const tryParse = (x) => { try { return JSON.parse(x); } catch { return null; } };
+
+  let v = tryParse(raw);
+  if (v && typeof v === "object") return v;
+
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) {
+    v = tryParse(fence[1].trim());
+    if (v && typeof v === "object") return v;
+  }
+
+  for (const [open, close] of [["{", "}"], ["[", "]"]]) {
+    let start = -1, depth = 0, inStr = false, esc = false;
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; continue; }
+      if (c === open) { if (depth === 0) start = i; depth++; }
+      else if (c === close && depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          v = tryParse(raw.slice(start, i + 1));
+          if (v && typeof v === "object") return v;
+          start = -1;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // ---- Парсинг ленты ----
@@ -130,10 +230,27 @@ export async function findLeads(target, onLog) {
   const cands = fr.posts.filter((p) => passesFilters(p, s)).slice(0, s.hunter.keepBest);
   onLog?.(`Кандидатов: ${cands.length}. Квалифицирую…`);
   const leads = [];
-  for (const p of cands) {
-    const prompt = fill(s.leadPrompt, { brand: s.brand, author: p.author, post: p.text, niche: s.niche });
-    const r = await chat([{ role: "user", content: prompt }], { temperature: 0.3 });
-    const data = safeJson(r);
+  let fails = 0;
+  for (let i = 0; i < cands.length; i++) {
+    const p = cands[i];
+    onLog?.(`🔍 ${i + 1}/${cands.length} @${p.author || "?"}`);
+    let data = null;
+    try {
+      const prompt = fill(s.leadPrompt, { brand: s.brand, author: p.author, post: (p.text || "").slice(0, 1200), niche: s.niche });
+      const r = await chat([{ role: "user", content: prompt }],
+                           { temperature: 0.3, timeoutMs: 45000, retries: 1 });
+      data = safeJson(r);
+      fails = 0;
+    } catch (e) {
+      // Один сбой модели не должен обрывать весь поиск клиентов:
+      // раньше исключение вылетало наружу и терялись уже найденные лиды.
+      if (e?.name === "GensOutError") { onLog?.("💎 Генерации закончились — останавливаюсь."); break; }
+      fails++;
+      onLog?.(`   ⚠ модель: ${e?.message || e} (${fails}/4)`);
+      if (fails >= 4) { onLog?.("Модель не отвечает — прекращаю отбор."); break; }
+      await sleep(1500 * fails);
+      continue;
+    }
     if (data?.is_lead) {
       const lead = { ...p, score: data.score || 0, reason: data.reason || "", angle: data.angle || "" };
       leads.push(lead);
@@ -240,7 +357,69 @@ export async function rewriteLikeViral(viralPost, topic) {
 }
 
 // ---- ОХОТНИК ЗА КЛИЕНТАМИ (5 шагов) ----
+
+/** Потолок ожидания одного ответа модели на шаге квалификации. */
+const QUALIFY_TIMEOUT_MS = 45000;
+/**
+ * Потолок на ВЕСЬ шаг отбора. Дошли до него — прекращаем квалификацию и
+ * идём комментировать то, что уже отобрано. Раньше шаг не был ограничен
+ * ничем: 40–60 запросов к модели подряд на медленном бэкенде легко
+ * растягивались на десятки минут, и со стороны это было неотличимо от
+ * зависания — тем более что шаг не писал в лог ни строки.
+ */
+const QUALIFY_BUDGET_MS = 7 * 60 * 1000;
+/**
+ * Сколько ошибок модели подряд терпим, прежде чем закончить отбор.
+ * Три — потому что каждая «ошибка» это уже исчерпанный таймаут с повтором
+ * (около полутора минут): дальше ждать бессмысленно, лучше пойти писать
+ * комментарии тем, кто уже отобран.
+ */
+const QUALIFY_MAX_FAILS = 3;
+/**
+ * Больше стольких кандидатов за один прогон модели не показываем.
+ * Каждый кандидат — отдельная платная генерация; при «оставить лучших =
+ * 30» это 60 запросов, и бесплатный пакет сгорал за один запуск ещё до
+ * того, как охотник успевал что-то написать.
+ */
+const MAX_QUALIFY = 60;
+
+/**
+ * Грубая локальная оценка «похоже на клиента» — без модели.
+ * Нужна как страховка: если AI-квалификация не состоялась (кончились
+ * генерации, таймауты, мусорные ответы), охотник всё равно должен дойти
+ * до пятого шага, а не закончиться на «Отобрано лидов: 0».
+ */
+function localLeadScore(p, s) {
+  const t = (p.text || "").toLowerCase();
+  if (!t) return 0;
+  const kws = (s.leadKeywords || []).filter(Boolean);
+  const hits = kws.filter((k) => t.includes(String(k).toLowerCase())).length;
+  if (!hits) return 0;
+  return Math.min(95, hits * 20 + Math.min(20, Math.round((p.engagement || 0) / 10)));
+}
+
+/** Человеческий текст ошибки модели для лога программы. */
+function aiErrText(e) {
+  if (e?.name === "GensOutError") return "генерации закончились";
+  return e?.message || String(e);
+}
+
 export async function runHunter(cfg, hooks) {
+  // Внешняя обёртка: что бы ни случилось внутри, наружу уходит объект, а
+  // не отклонённый промис. Обработчик кнопки «Запустить программу»
+  // вызывал runHunter без catch — любое исключение превращалось в
+  // unhandled rejection, и карточка прогресса навсегда замирала в
+  // состоянии «идёт» на том шаге, где её застала ошибка. Именно так
+  // выглядело «зависает на отборе лидов».
+  try {
+    return await runHunterInner(cfg, hooks);
+  } catch (e) {
+    hooks?.log?.("✕ Сбой программы: " + (e?.message || e));
+    return { ok: false, crashed: true, error: e?.message || String(e) };
+  }
+}
+
+async function runHunterInner(cfg, hooks) {
   const s = await getSettings();
   const H = { ...s.hunter, ...cfg };
   const step = hooks?.step || (() => {});
@@ -255,8 +434,28 @@ export async function runHunter(cfg, hooks) {
     `Бизнес/продукт и идеальный клиент: "${H.product}". Ниша: ${s.niche}.\n` +
     `Составь ${H.hypotheses} коротких поисковых запросов (на языке аудитории), по которым в Threads ` +
     `сидят потенциальные клиенты этого бизнеса. Верни СТРОГО JSON-массив строк.`;
-  const hypRaw = await chat([{ role: "user", content: hypPrompt }], { temperature: 0.7 });
-  const queries = safeJson(hypRaw) || [];
+  let queries = [];
+  try {
+    const hypRaw = await chat([{ role: "user", content: hypPrompt }],
+                              { temperature: 0.7, timeoutMs: 60000, retries: 2 });
+    queries = (safeJson(hypRaw) || [])
+      .filter((x) => typeof x === "string" && x.trim())
+      .map((x) => x.trim())
+      .slice(0, Math.max(1, Number(H.hypotheses) || 5));
+  } catch (e) {
+    if (e?.name === "GensOutError") { step(0, "err"); throw e; }
+    log("Гипотезы не построились: " + aiErrText(e));
+  }
+  if (!queries.length) {
+    // Запасной путь вместо полного отказа: ищем по самому описанию
+    // продукта. Прежде программа здесь просто заканчивалась с ошибкой.
+    queries = String(H.product || s.niche || "")
+      .split(/[.,;\n]|\sи\s/)
+      .map((x) => x.trim())
+      .filter((x) => x.length > 3)
+      .slice(0, 3);
+    if (queries.length) log("Иду по описанию продукта — гипотезы не построились.");
+  }
   if (!queries.length) { step(0, "err"); return { ok: false, error: "не удалось построить гипотезы" }; }
   log("Гипотезы: " + queries.join(" · "));
   step(0, "done");
@@ -298,12 +497,21 @@ export async function runHunter(cfg, hooks) {
   }
 
   for (const q of queries) {
+    await hold();
     if (isStopped()) return { ok: false, stopped: true };
-    const r = await parseSearch(q, H.threadsPerQuery, (m) => log(m), "recent");
-    log(`«${q}»: +${r.posts?.length || 0}`);
-    all = all.concat((r.posts || []).map((p) => ({ ...p, _q: q })));
+    try {
+      const r = await parseSearch(q, H.threadsPerQuery, (m) => log(m), "recent");
+      log(`«${q}»: +${r.posts?.length || 0}`);
+      all = all.concat((r.posts || []).map((p) => ({ ...p, _q: q })));
+    } catch (e) {
+      // Одна сорвавшаяся страница поиска не повод терять весь прогон.
+      log(`«${q}»: не собралось — ${e.message || e}`);
+    }
   }
-  step(1, "done");
+  step(1, all.length ? "done" : "err");
+  if (!all.length) {
+    return { ok: false, error: "не удалось собрать ни одного поста — проверь, что вкладка Threads открыта и залогинена" };
+  }
 
   // Шаг 3 — свежесть/уникальность
   step(2, "run");
@@ -317,41 +525,173 @@ export async function runHunter(cfg, hooks) {
   }
   uniq = uniq.filter((p) => (p.likes >= (H.minLikes || 0)) && (p.comments >= (H.minReplies || 0)));
   log(`Уникальных свежих: ${uniq.length}`);
-  step(2, "done");
+  step(2, uniq.length ? "done" : "err");
+  if (!uniq.length) {
+    return { ok: false,
+             error: "после фильтров не осталось ни одной ветки. Увеличь окно свежести " +
+                    "или снизь минимум лайков/комментариев в настройках охотника." };
+  }
 
+  // ─────────────────────────────────────────────────────────────────
   // Шаг 4 — квалификация
+  // ─────────────────────────────────────────────────────────────────
   step(3, "run");
   uniq.sort((a, b) => (b.engagement || 0) - (a.engagement || 0));
-  const pool = uniq.slice(0, Math.max(H.keepBest * 2, 40));
+
+  // Дешёвый предфильтр ДО модели. Пустые тексты, собственные посты и
+  // стоп-слова раньше честно уезжали в модель и жгли генерации впустую:
+  // на 60 кандидатов это 60 платных запросов, из которых часть заведомо
+  // мусорная. Каждый сэкономленный запрос — это ещё и минус несколько
+  // секунд к шагу, который и так читался как зависание.
+  const own = String(s.brandHandle || "").replace(/^@/, "").toLowerCase();
+  const prelim = uniq.filter((p) => {
+    const t = (p.text || "").trim();
+    if (t.length < 15) return false;
+    if (own && String(p.author || "").toLowerCase() === own) return false;
+    const low = t.toLowerCase();
+    if ((s.stopKeywords || []).some((k) => k && low.includes(String(k).toLowerCase()))) return false;
+    return true;
+  });
+  if (prelim.length < uniq.length) {
+    log(`Предфильтр (пустые / свои / стоп-слова): ${uniq.length} → ${prelim.length}`);
+  }
+
+  const keepBest = Math.max(1, Number(H.keepBest) || 10);
+  const pool = prelim.slice(0, Math.min(Math.max(keepBest * 2, 40), MAX_QUALIFY));
   const leads = [];
-  for (const p of pool) {
-    if (isStopped()) return { ok: false, stopped: true };
-    if (leads.length >= H.keepBest) break;
-    const prompt = fill(s.leadPrompt, { brand: s.brand + " | " + H.product, author: p.author, post: p.text, niche: s.niche });
-    const r = await chat([{ role: "user", content: prompt }], { temperature: 0.3 });
-    const d = safeJson(r);
+  let qFails = 0, qUnparsed = 0, qStopReason = "";
+  const deadline = Date.now() + QUALIFY_BUDGET_MS;
+
+  log(`Квалифицирую: ${pool.length} кандидатов (потолок ${MAX_QUALIFY} за прогон), ` +
+      `нужно лучших — ${keepBest}`);
+
+  for (let i = 0; i < pool.length; i++) {
+    const p = pool[i];
+    await hold();
+    if (isStopped()) { qStopReason = "stopped"; break; }
+    if (leads.length >= keepBest) { qStopReason = "enough"; break; }
+    if (Date.now() > deadline) {
+      qStopReason = "deadline";
+      log(`⏱ Отбор идёт дольше ${Math.round(QUALIFY_BUDGET_MS / 60000)} мин — ` +
+          `останавливаю его и иду комментировать то, что уже отобрано.`);
+      break;
+    }
+
+    // Прогресс пишем ВСЕГДА. Раньше шаг молчал, пока не попадётся лид, —
+    // при сорока кандидатах панель стояла без единой строки по несколько
+    // минут, и это читалось как «программа повисла».
+    log(`🔍 ${i + 1}/${pool.length} @${p.author || "?"} · проверяю`);
+
+    let d = null;
+    try {
+      const prompt = fill(s.leadPrompt, {
+        brand: [s.brand, H.product].filter(Boolean).join(" | "),
+        author: p.author,
+        post: (p.text || "").slice(0, 1200),
+        niche: s.niche,
+      });
+      const r = await chat([{ role: "user", content: prompt }],
+                           { temperature: 0.3, timeoutMs: QUALIFY_TIMEOUT_MS, retries: 1 });
+      d = safeJson(r);
+      qFails = 0;
+      if (!d) { qUnparsed++; log("   ↷ ответ модели не разобрался — пропускаю"); }
+    } catch (e) {
+      if (e?.name === "GensOutError") {
+        qStopReason = "gens";
+        log("💎 Генерации закончились. Отбор остановлен — комментирую тех, кого уже отобрала.");
+        break;
+      }
+      qFails++;
+      log(`   ⚠ модель: ${aiErrText(e)} (сбой ${qFails}/${QUALIFY_MAX_FAILS})`);
+      if (qFails >= QUALIFY_MAX_FAILS) {
+        qStopReason = "ai-down";
+        log("Модель не отвечает несколько раз подряд — прекращаю отбор и перехожу к комментариям.");
+        break;
+      }
+      await sleep(1500 * qFails);
+      continue;
+    }
+
     if (d?.is_lead) {
       const lead = { ...p, score: d.score || 0, reason: d.reason || "", angle: d.angle || "" };
-      leads.push(lead); await saveLeads([lead]);
+      leads.push(lead);
+      await saveLeads([lead]);
       await sendLeadToTg(lead, s, `Программа: охотник · «${H.product}»`);
-      log(`🎯 @${p.author} (${lead.score})`);
+      log(`🎯 @${p.author} (${lead.score}) — ${lead.reason || "подходит"}`);
     }
-    await sleep(500);
+    await sleep(400);
   }
-  log(`Отобрано лидов: ${leads.length}`);
-  step(3, "done");
 
+  // Ни одного лида, но отбор не доработал честно (кончились генерации,
+  // модель молчала, вышло время, ответы не разобрались) — берём лучших
+  // по ключевым словам. Если же модель осмотрела всех и всех отвергла,
+  // её решение уважаем и ничего не придумываем.
+  const qualificationBroke = ["gens", "ai-down", "deadline"].includes(qStopReason) || qUnparsed > 0;
+  if (!leads.length && pool.length && qualificationBroke && !isStopped()) {
+    const picked = pool
+      .map((p) => ({ p, sc: localLeadScore(p, s) }))
+      .filter((x) => x.sc > 0)
+      .sort((a, b) => b.sc - a.sc)
+      .slice(0, Math.min(5, keepBest));
+    for (const { p, sc } of picked) {
+      const lead = { ...p, score: sc, reason: "по ключевым словам (без AI-оценки)", angle: "" };
+      leads.push(lead);
+      await saveLeads([lead]);
+    }
+    if (picked.length) {
+      log(`AI-оценка не состоялась — отобрала ${picked.length} по ключевым словам.`);
+    }
+  }
+
+  log(`Отобрано лидов: ${leads.length}`);
+  // Красным помечаем только настоящий сбой отбора. «Проверили всех и
+  // никто не подошёл» — нормально отработавший шаг, а не ошибка.
+  step(3, (!leads.length && ["gens", "ai-down"].includes(qStopReason)) ? "err" : "done");
+
+  if (isStopped()) {
+    return { ok: false, stopped: true, queries, leadsCount: leads.length, commented: 0 };
+  }
+  if (!leads.length) {
+    step(4, "err");
+    return { ok: true, queries, leadsCount: 0, commented: 0, failed: 0, skipped: 0, bySkip: {},
+             note: "подходящих клиентов не нашлось — смягчи фильтры или опиши продукт конкретнее" };
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // Шаг 5 — диалоги (комментарии)
+  // ─────────────────────────────────────────────────────────────────
   step(4, "run");
   // Брони «в работе» от прогонов, которые не доработали до конца (стоп,
   // закрытая вкладка, перезагрузка), живут до 10 минут и молча съедали
   // те же самые лиды при повторном запуске. Снимаем их перед стартом —
   // список «уже прокомментировано» при этом не трогается.
+  const pg = await bg({ type: "PURGE_CLAIMS", what: "working" });
+  if (pg?.purged) log(`Снято зависших броней: ${pg.purged}`);
+
+  let tab;
   try {
-    const pg = await chrome.runtime.sendMessage({ type: "PURGE_CLAIMS", what: "working" });
-    if (pg?.purged) log(`Снято зависших броней: ${pg.purged}`);
-  } catch {}
-  const tab = await ensureThreadsTab();
+    tab = await ensureThreadsTab();
+  } catch (e) {
+    step(4, "err");
+    return { ok: false, error: "не удалось открыть вкладку Threads: " + (e.message || e),
+             queries, leadsCount: leads.length, commented: 0 };
+  }
+
+  /**
+   * Живой id вкладки. Человек может закрыть Threads посреди прогона —
+   * тогда chrome.tabs.update отклоняет промис, и исключение убивало всю
+   * программу на полуслове (карточка так и оставалась «идёт»).
+   */
+  const liveTabId = async () => {
+    try {
+      const t = await chrome.tabs.get(tab.id);
+      if (t) return t.id;
+    } catch {}
+    tab = await ensureThreadsTab();
+    log("Вкладка Threads была закрыта — открыла новую.");
+    return tab.id;
+  };
+
   let commented = 0, failed = 0, actions = 0, skipped = 0;
   const bySkip = {};
 
@@ -369,14 +709,19 @@ export async function runHunter(cfg, hooks) {
     log(`Свернула дубли авторов: ${leads.length} → ${targets.length}`);
   }
 
-  const cap = await safeDailyCap(s.maxCommentsPerDay);
+  const cap = await safeDailyCap(s.maxCommentsPerDay).catch(() => s.maxCommentsPerDay || 30);
+  log(`Начинаю диалоги: ${targets.length} веток · лимит на сегодня ${cap}`);
 
   for (const lead of targets) {
     if (isStopped()) break;
     await hold();
     if (isStopped()) break;
-    if (!(await withinActiveHours())) { log("⏸ Вне активных часов — стоп (Safe Mode)."); break; }
-    const c = (await chrome.runtime.sendMessage({ type: "GET_COUNTERS" })).counters;
+    if (!(await withinActiveHours().catch(() => true))) {
+      log("⏸ Вне активных часов — стоп (Safe Mode). Измени «активные часы» в настройках, " +
+          "если хочешь работать сейчас.");
+      break;
+    }
+    const c = (await bg({ type: "GET_COUNTERS" })).counters || { comments: 0 };
     if (c.comments >= cap) { log(`Достигнут дневной лимит комментов (${cap}).`); break; }
     // Атомарно занимаем пост: пометка «прокомментировано» ставится
     // ТОЛЬКО после подтверждённой отправки (см. COMMIT_POST ниже).
@@ -385,8 +730,12 @@ export async function runHunter(cfg, hooks) {
     // `continue`, и охотник, отобрав восемь лидов, мог не написать ни
     // одного — без единой строки о причине. Со стороны это выглядело как
     // «нашёл, но не комментирует».
-    const claim = await chrome.runtime.sendMessage({ type: "CLAIM_POST", code: lead.code });
-    if (!claim?.claimed) {
+    const claim = await bg({ type: "CLAIM_POST", code: lead.code });
+    if (claim._bgFailed) {
+      // Фон недоступен. Лучше написать без брони (и потенциально
+      // повториться при следующем прогоне), чем молча не сделать ничего.
+      log("⚠ Фон не ответил на бронь поста — продолжаю без неё.");
+    } else if (!claim.claimed) {
       skipped++;
       const why = {
         commented: "уже комментировали раньше",
@@ -401,16 +750,36 @@ export async function runHunter(cfg, hooks) {
       continue;
     }
 
-    const cprompt = fill(s.hunterCommentPrompt, {
-      brandName: s.brandName, brand: s.brand + " | " + H.product,
-      author: lead.author, post: lead.text, angle: lead.angle || "",
-    });
-    const draft = await chat([{ role: "user", content: cprompt }], { temperature: 0.8 });
-    // fitComment режет по границам предложений и снимает висящие союзы —
-    // раньше здесь был slice() и заход обрывался на «а не»
-    const fit = fitComment(draft, { maxChars: s.hunterMaxChars || 190, emoji: s.commentEmoji });
-    const text = fit.text;
-    if (!fit.complete) log(`⚠ Ответ по @${lead.author} пришлось укоротить`);
+    let text = "";
+    try {
+      const cprompt = fill(s.hunterCommentPrompt, {
+        brandName: s.brandName, brand: [s.brand, H.product].filter(Boolean).join(" | "),
+        author: lead.author, post: (lead.text || "").slice(0, 1200), angle: lead.angle || "",
+      });
+      const draft = await chat([{ role: "user", content: cprompt }],
+                               { temperature: 0.8, timeoutMs: 60000, retries: 1 });
+      // fitComment режет по границам предложений и снимает висящие союзы —
+      // раньше здесь был slice() и заход обрывался на «а не»
+      const fit = fitComment(draft, { maxChars: s.hunterMaxChars || 190, emoji: s.commentEmoji });
+      text = fit.text;
+      if (!fit.complete) log(`⚠ Ответ по @${lead.author} пришлось укоротить`);
+    } catch (e) {
+      // Текст не сгенерировался — это не повод ронять весь прогон.
+      // Отпускаем лид с короткой паузой и идём дальше.
+      failed++;
+      await bg({ type: "RELEASE_POST", code: lead.code, cooldownMin: 30 });
+      log(`✕ @${lead.author}: текст не сгенерировался — ${aiErrText(e)}`);
+      if (e?.name === "GensOutError") { log("Дальше писать нечем — останавливаюсь."); break; }
+      continue;
+    }
+
+    if (!text || text.length < 12) {
+      skipped++;
+      bySkip["слабый текст"] = (bySkip["слабый текст"] || 0) + 1;
+      await bg({ type: "RELEASE_POST", code: lead.code, cooldownMin: 60 });
+      log(`⤼ @${lead.author}: модель вернула огрызок — пропускаю`);
+      continue;
+    }
 
     // Режим берём из настроек охотника: раньше здесь всегда стоял
     // s.commentMode, и в «авто» комментарий оставался черновиком.
@@ -423,19 +792,26 @@ export async function runHunter(cfg, hooks) {
      * и «поле исчезло» на первом же лиде.
      */
     const tryComment = async () => {
-      await navigate(tab.id, lead.permalink);
-      if (!(await ensureContentScript(tab.id))) {
-        return { ok: false, error: "content-script не поднялся на странице поста" };
+      try {
+        const id = await liveTabId();
+        await navigate(id, lead.permalink);
+        if (!(await ensureContentScript(id))) {
+          return { ok: false, error: "content-script не поднялся на странице поста" };
+        }
+        const ready = await rpcSafe(id, "RPC_WAIT_POST", { code: lead.code, timeout: 12000 }, 20000);
+        if (!ready.ok) return { ok: false, error: ready.error || "ветка не открылась" };
+        await sleep(900);
+        // 60с не хватало: посимвольный ввод + до трёх подтверждений отправки
+        // легко перешагивают минуту, а «timeout» трактовался как провал —
+        // при том что комментарий мог уже уйти.
+        // rpcSafe НЕ используем: этот вызов меняет состояние, и слепой повтор
+        // после обрыва связи мог бы отправить второй комментарий.
+        return await rpc(id, "RPC_COMMENT", { code: lead.code, text, mode }, 180000);
+      } catch (e) {
+        // Вкладку закрыли, расширение перезагрузили и т.п. Возвращаем
+        // ошибку объектом, а не исключением: иначе падает весь прогон.
+        return { ok: false, error: "вкладка: " + (e?.message || e) };
       }
-      const ready = await rpcSafe(tab.id, "RPC_WAIT_POST", { code: lead.code, timeout: 12000 }, 20000);
-      if (!ready.ok) return { ok: false, error: ready.error || "ветка не открылась" };
-      await sleep(900);
-      // 60с не хватало: посимвольный ввод + до трёх подтверждений отправки
-      // легко перешагивают минуту, а «timeout» трактовался как провал —
-      // при том что комментарий мог уже уйти.
-      // rpcSafe НЕ используем: этот вызов меняет состояние, и слепой повтор
-      // после обрыва связи мог бы отправить второй комментарий.
-      return rpc(tab.id, "RPC_COMMENT", { code: lead.code, text, mode }, 180000);
     };
 
     let r = await tryComment();
@@ -448,43 +824,53 @@ export async function runHunter(cfg, hooks) {
     const retryable = !r.ok && !r.risky && !unclear;
     if (retryable && !isStopped()) {
       log(`↻ @${lead.author}: ${r.error || "не вышло"} — пробую ещё раз`);
-      await navigate(tab.id, "https://www.threads.com/");
+      try {
+        await navigate(await liveTabId(), "https://www.threads.com/");
+      } catch {}
       await sleep(1500);
       r = await tryComment();
     }
 
     if (r.ok && r.sent) {
-      await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: lead.code });
-      await chrome.runtime.sendMessage({ type: "BUMP_COUNTER", field: "comments" });
-      commented++; log(`💬 @${lead.author}: отправлено ✅`);
+      await bg({ type: "COMMIT_POST", code: lead.code });
+      await bg({ type: "BUMP_COUNTER", field: "comments" });
+      commented++; log(`💬 @${lead.author}: отправлено ✅ «${text}»`);
     } else if (r.risky) {
       // Композер очистился без подтверждения — комментарий мог уйти.
-      await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: lead.code });
+      await bg({ type: "COMMIT_POST", code: lead.code });
       log(`⚠ @${lead.author}: подтверждения нет, повтор не делаю (риск дубля)`);
     } else if (unclear) {
       // Вкладка не ответила вовремя. Отправка могла состояться —
       // помечаем как обработанный, но в счётчик не пишем.
-      await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: lead.code });
+      await bg({ type: "COMMIT_POST", code: lead.code });
       log(`⚠ @${lead.author}: связь с вкладкой оборвалась (${r.error}) — повтор не делаю`);
     } else if (r.ok) {
-      await chrome.runtime.sendMessage({ type: "QUEUE_POST", code: lead.code });
+      await bg({ type: "QUEUE_POST", code: lead.code });
       log(`💬 @${lead.author}: черновик вставлен (режим «вручную»)`);
     } else {
       failed++;
       // 720 мин сжигало лид на полсуток из-за случайной осечки вёрстки.
-      await chrome.runtime.sendMessage({ type: "RELEASE_POST", code: lead.code, cooldownMin: 90 });
+      await bg({ type: "RELEASE_POST", code: lead.code, cooldownMin: 90 });
       log(`✕ @${lead.author}: ${r.error || "не отправилось"}`);
     }
 
     // Выходим из ветки к ленте — иначе следующий лид открывался поверх старой
     // страницы и охотник «залипал» в одном обсуждении.
-    await navigate(tab.id, "https://www.threads.com/");
+    try { await navigate(await liveTabId(), "https://www.threads.com/"); } catch {}
     await sleep(1200);
+
+    if (isStopped()) break;
 
     // Пауза берётся из Safe Mode, как в остальных режимах: раньше охотник
     // жил по своим правилам и разгонялся быстрее автокомментинга.
     actions++;
-    const base = s.commentDelayMinSec + Math.random() * (s.commentDelayMaxSec - s.commentDelayMinSec);
+    // Защита от NaN: при аварийно прочитанных настройках выражение
+    // min + random*(max-min) давало NaN, а sleep(NaN) — нулевую паузу,
+    // то есть охотник начинал строчить комментарии без передышки.
+    const secs = (v, d) => { const x = Number(v); return Number.isFinite(x) && x >= 0 ? x : d; };
+    const lo = secs(s.commentDelayMinSec, 45);
+    const hi = Math.max(lo, secs(s.commentDelayMaxSec, lo));
+    const base = lo + Math.random() * (hi - lo);
     const wait = s.safe?.enabled ? await nextGapSec().catch(() => base) : base;
     log(`Пауза ${wait | 0}с перед следующим лидом…`);
     for (let t = 0; t < wait && !isStopped(); t += 5) { await sleep(5000); await hold(); }
@@ -507,7 +893,8 @@ export async function runHunter(cfg, hooks) {
         "подожди окончания паузы или нажми «Сбросить брони» в настройках.");
   }
   step(4, failed && !commented ? "err" : "done");
-  return { ok: true, queries, leadsCount: targets.length, commented, failed, skipped, bySkip };
+  return { ok: true, queries, leadsCount: targets.length, commented, failed, skipped, bySkip,
+           stopped: isStopped() };
 }
 
 // короткий коммент (1 предложение)
@@ -563,37 +950,37 @@ export async function runCommenting(hooks) {
   for (const p of targets) {
     if (stop()) break;
     if (!(await withinActiveHours())) { log("⏸ Вне активных часов — стоп (Safe Mode)."); break; }
-    const c = (await chrome.runtime.sendMessage({ type: "GET_COUNTERS" })).counters;
+    const c = (await bg({ type: "GET_COUNTERS" })).counters || { comments: 0 };
     if (c.comments >= cap) { log(`Дневной лимит (${cap}) достигнут.`); break; }
-    const claim2 = await chrome.runtime.sendMessage({ type: "CLAIM_POST", code: p.code });
-    if (!claim2?.claimed) continue;
+    const claim2 = await bg({ type: "CLAIM_POST", code: p.code });
+    if (!claim2._bgFailed && !claim2.claimed) continue;
     let text;
     try { text = await genComment(p, s); }
     catch (e) {
       log("AI Threads: " + e.message);
-      await chrome.runtime.sendMessage({ type: "RELEASE_POST", code: p.code, cooldownMin: 30 });
+      await bg({ type: "RELEASE_POST", code: p.code, cooldownMin: 30 });
       continue;
     }
     if (!text || text.length < 12) {
       log(`⤼ @${p.author}: слабый ответ, пропускаю`);
-      await chrome.runtime.sendMessage({ type: "RELEASE_POST", code: p.code, cooldownMin: 360 });
+      await bg({ type: "RELEASE_POST", code: p.code, cooldownMin: 360 });
       continue;
     }
     log(`Открываю пост @${p.author}…`);
     await navigate(tab.id, p.permalink);
     const res = await rpcSafe(tab.id, "RPC_COMMENT", { code: p.code, text, mode: s.commentMode, like: s.likeOnComment });
     if (res.ok && res.sent) {
-      await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: p.code });
-      await chrome.runtime.sendMessage({ type: "BUMP_COUNTER", field: "comments" });
+      await bg({ type: "COMMIT_POST", code: p.code });
+      await bg({ type: "BUMP_COUNTER", field: "comments" });
       done++; log(`💬 @${p.author}: «${text}» — отправлено ✅`);
     } else if (res.risky) {
-      await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: p.code });
+      await bg({ type: "COMMIT_POST", code: p.code });
       log(`⚠ @${p.author}: подтверждения нет, но поле очистилось — повтор не делаю`);
     } else if (res.ok) {
-      await chrome.runtime.sendMessage({ type: "QUEUE_POST", code: p.code });
+      await bg({ type: "QUEUE_POST", code: p.code });
       log(`💬 @${p.author}: «${text}» — черновик (подтверди в окне)`);
     } else {
-      await chrome.runtime.sendMessage({ type: "RELEASE_POST", code: p.code, cooldownMin: 720 });
+      await bg({ type: "RELEASE_POST", code: p.code, cooldownMin: 720 });
       log(`✕ @${p.author}: ${res.error || "не отправилось"}`);
     }
     // всегда возвращаемся в ленту, чтобы не остаться внутри ветки
@@ -1027,13 +1414,16 @@ export async function commentOnLead(lead, text, mode = "auto", log = () => {}) {
   if (!ready.ok) return { ok: false, error: ready.error || "ветка не открылась" };
   await sleep(900);
   log("ветка открыта, вставляю комментарий");
-  // Состояние меняется — слепой повтор запрещён, поэтому rpc, а не rpcSafe.
-  const r = await rpcSafe(tab.id, "RPC_COMMENT", { code: lead.code, text, mode }, 180000);
+  // Состояние меняется — слепой повтор запрещён, поэтому rpc, а не rpcSafe:
+  // rpcSafe повторяет и при «message channel closed», а это значит, что
+  // вкладка команду приняла и умерла уже в процессе — комментарий мог уйти,
+  // и повтор оставил бы второй такой же под тем же постом.
+  const r = await rpc(tab.id, "RPC_COMMENT", { code: lead.code, text, mode }, 180000);
   if (r.ok && r.sent) {
-    await chrome.runtime.sendMessage({ type: "COMMIT_POST", code: lead.code });
-    await chrome.runtime.sendMessage({ type: "BUMP_COUNTER", field: "comments" });
+    await bg({ type: "COMMIT_POST", code: lead.code });
+    await bg({ type: "BUMP_COUNTER", field: "comments" });
   } else if (r.ok) {
-    await chrome.runtime.sendMessage({ type: "QUEUE_POST", code: lead.code });
+    await bg({ type: "QUEUE_POST", code: lead.code });
   }
   return r;
 }

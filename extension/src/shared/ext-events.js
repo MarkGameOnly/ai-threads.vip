@@ -15,6 +15,24 @@
 import { getSettings } from "./storage.js";
 
 /**
+ * fetch с жёстким потолком ожидания.
+ *
+ * Все вызовы ниже идут из рабочих циклов (охотник, автокомментинг,
+ * планировщик). Без таймаута один повисший запрос к бэкенду останавливал
+ * весь цикл насмерть: промис не завершался никогда, а снаружи это
+ * выглядело как «программа зависла на пустом месте».
+ */
+async function xfetch(url, init = {}, timeoutMs = 20000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Отправить одно операционное событие. Fire-and-forget: событие не должно
  * тормозить или ронять сам цикл хантера/автокомментинга — если бэкенд
  * недоступен, просто теряем это событие (панель здоровья не обязана быть
@@ -28,7 +46,7 @@ export async function extEvent(kind, payload = {}) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken) return; // кабинет не подключён — молча выходим
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/event";
-    await fetch(url, {
+    await xfetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -54,7 +72,7 @@ export async function createReview(payload) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken) return null;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/review";
-    const res = await fetch(url, {
+    const res = await xfetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Ext-Token": s.apiToken },
       body: JSON.stringify({ token: s.apiToken, ...payload }),
@@ -73,7 +91,7 @@ export async function pollReview(id) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken || !id) return null;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/review/" + encodeURIComponent(id);
-    const res = await fetch(url, { headers: { "X-Ext-Token": s.apiToken } });
+    const res = await xfetch(url, { headers: { "X-Ext-Token": s.apiToken } });
     if (!res.ok) return null;
     const data = await res.json();
     return data.status || null;
@@ -92,7 +110,7 @@ export async function listScheduled() {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken) return [];
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/scheduled";
-    const res = await fetch(url, { headers: { "X-Ext-Token": s.apiToken } });
+    const res = await xfetch(url, { headers: { "X-Ext-Token": s.apiToken } });
     if (!res.ok) return [];
     const data = await res.json();
     return data.items || [];
@@ -107,7 +125,7 @@ export async function fetchScheduledMedia(id) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken || !id) return null;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/scheduled/" + encodeURIComponent(id) + "/media";
-    const res = await fetch(url, { headers: { "X-Ext-Token": s.apiToken } });
+    const res = await xfetch(url, { headers: { "X-Ext-Token": s.apiToken } }, 120000);
     if (!res.ok) return null;
     const mime = res.headers.get("content-type") || "application/octet-stream";
     const buf = await res.arrayBuffer();
@@ -131,7 +149,7 @@ export async function claimScheduled(id) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken || !id) return false;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/scheduled/" + encodeURIComponent(id) + "/claim";
-    const res = await fetch(url, {
+    const res = await xfetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Ext-Token": s.apiToken },
     });
@@ -148,7 +166,7 @@ export async function reportScheduledResult(id, ok, reason = "") {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken || !id) return;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/scheduled/" + encodeURIComponent(id) + "/result";
-    await fetch(url, {
+    await xfetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Ext-Token": s.apiToken },
       body: JSON.stringify({ token: s.apiToken, ok: !!ok, reason }),
@@ -164,7 +182,7 @@ export async function fetchHealth(hours = 24) {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken) return null;
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/health?hours=" + encodeURIComponent(hours);
-    const res = await fetch(url, { headers: { "X-Ext-Token": s.apiToken } });
+    const res = await xfetch(url, { headers: { "X-Ext-Token": s.apiToken } });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -178,7 +196,7 @@ export async function fetchReviewHistory() {
     const s = await getSettings();
     if (!s.backendUrl || !s.apiToken) return [];
     const url = s.backendUrl.replace(/\/+$/, "") + "/api/ext/review";
-    const res = await fetch(url, { headers: { "X-Ext-Token": s.apiToken } });
+    const res = await xfetch(url, { headers: { "X-Ext-Token": s.apiToken } });
     if (!res.ok) return [];
     const data = await res.json();
     return data.items || [];

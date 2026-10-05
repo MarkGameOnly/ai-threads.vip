@@ -416,7 +416,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         default: sendResponse({ ok: false, error: "unknown: " + msg?.type });
       }
     } catch (e) {
-      sendResponse({ ok: false, error: e.message || String(e), status: e instanceof AIError ? e.status : undefined });
+      // kind/buyUrl обязательны: через sendMessage едет только простой
+      // объект, класс ошибки теряется. Без них панель не могла отличить
+      // «кончились генерации» (надо показать карточку VIP и остановить
+      // отбор) от обычного сбоя сети (надо повторить) — и охотник в обоих
+      // случаях просто падал молча.
+      sendResponse({
+        ok: false,
+        error: e.message || String(e),
+        status: e instanceof AIError ? e.status : undefined,
+        kind: e?.name || "Error",
+        retryable: !!e?.retryable,
+        buyUrl: e?.buyUrl || "",
+      });
     }
   })();
   return true;
