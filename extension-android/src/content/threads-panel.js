@@ -334,26 +334,40 @@
         addLog({ msg: "Калибровка: прохожу всю цепочку без отправки…" });
         const res = await window.DST.aim.calibrate(s.sel);
         for (const st of res.steps) {
-          addLog({ msg: `${st.ok ? "✓" : "✕"} ${st.name}${st.note ? " — " + st.note : ""}`,
-                   kind: st.ok ? "ok" : "err" });
+          // Три состояния, а не два: «–» означает «проверить нельзя, и это
+          // нормально». Раньше такие шаги показывались красным ✕ и портили
+          // итог полностью исправной калибровки.
+          const mark = st.skip ? "–" : st.ok ? "✓" : "✕";
+          addLog({ msg: `${mark} ${st.name}${st.note ? " — " + st.note : ""}`,
+                   kind: st.skip ? "" : st.ok ? "ok" : "err" });
         }
         addLog({ msg: "Проверяю способы ввода текста…" });
         const ins = await window.DST.dom.diagnoseInsertion(s.sel);
         if (ins.error) {
           addLog({ msg: "✕ " + ins.error, kind: "err" });
         } else {
-          for (const t of ins.tried) {
-            addLog({ msg: `${t.ok ? "✓" : "✕"} ввод «${t.name}»`, kind: t.ok ? "ok" : "err" });
-          }
+          // Это перебор приёмов, а не список поломок: Lexical принимает
+          // два-три способа из шести, и так и должно быть. Важно одно —
+          // работает ли ХОТЬ ОДИН. Шесть крестов в логе исправной машины
+          // выглядели как шесть неисправностей.
+          const bad = ins.tried.filter((t) => !t.ok).map((t) => t.name);
           addLog({
             msg: ins.ok
               ? `Рабочий способ ввода: ${ins.working.join(", ")} — запомнил его.`
               : "Ни один способ ввода не принят. Пришли этот лог — подберу приём под твою сборку Threads.",
             kind: ins.ok ? "ok" : "err",
           });
+          if (ins.ok && bad.length) {
+            addLog({ msg: `– не подошли (это нормально): ${bad.join(", ")}` });
+          }
         }
-        addLog({ msg: res.ok && ins.ok ? "Всё найдено — можно запускать." :
-                              "Часть шагов не прошла: смотри ✕ выше.", kind: (res.ok && ins.ok) ? "ok" : "err" });
+        const failed = (res.failed || []).length ? res.failed : null;
+        addLog({
+          msg: res.ok && ins.ok
+            ? "Всё найдено — можно запускать."
+            : `Не прошло: ${failed ? failed.join(", ") : "ввод текста"}. Остальное в порядке.`,
+          kind: (res.ok && ins.ok) ? "ok" : "err",
+        });
         console.log("[AI Threads] calibrate", res, ins);
         break;
       }

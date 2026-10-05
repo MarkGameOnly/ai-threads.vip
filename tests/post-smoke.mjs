@@ -199,7 +199,7 @@ function makeSandbox(page, extra = {}) {
     Math, Date, JSON, Promise, Array, Object, String, Number, Boolean,
     RegExp, Map, Set, Error, isFinite, isNaN, parseInt, parseFloat,
     document: page.doc,
-    location: { href: "https://www.threads.com" + page.pathname, pathname: page.pathname },
+    location: { href: "https://www.threads.com" + page.pathname, pathname: page.pathname, search: "" },
     screen: { width: 1440, height: 900 },
     innerHeight: 900, innerWidth: 1440,
     getComputedStyle: () => ({ visibility: "visible", display: "block", opacity: "1" }),
@@ -262,6 +262,66 @@ function openDialog(body) {
   const dlg = new El("div", { role: "dialog" }, [field]);
   dlg.rect = { top: 100, left: 0, width: 600, height: 400 };
   body.appendChild(dlg);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   1б. КОММЕНТАРИЙ НЕ УХОДИТ В СТРОКУ ПОИСКА
+
+   Живой случай. Агент открыл ветку, но в строке действий поста
+   кликнул по чипу «Поиск публикаций от sonya.goroshki». Ссылки у чипа
+   нет (role="button"), поэтому проверка «уведёт ли со страницы» его
+   пропустила: Threads ушёл на /search средствами приложения. Карточка
+   исчезла, единственным полем на новой странице осталась строка
+   поиска — туда и лёг комментарий.
+   ══════════════════════════════════════════════════════════════ */
+
+function buildSearchPage(page) {
+  // Строка поиска Threads — contenteditable (внутри живёт чип «Из автора»),
+  // поэтому обычный селектор редактируемых полей её видит.
+  const box = new El("div", { contenteditable: "true", "aria-label": "Поиск" });
+  box.rect = { top: 20, left: 200, width: 540, height: 40 };
+  page.body.appendChild(new El("div", { role: "search" }, [box]));
+  return box;
+}
+
+async function searchTrapCase() {
+  const page = makePage("/@lev_009__/post/ABC");
+  const ctx = makeSandbox(page, { chrome: { runtime: { onMessage: { addListener() {} } } } });
+  vm.runInContext(read("content/threads-dom.js"), ctx);
+  const D = ctx.window.DST.dom;
+
+  const chip = new El("div", { role: "button" }, [], "Поиск публикаций от sonya.goroshki");
+  chip.rect = { top: 400, left: 0, width: 120, height: 32 };
+  page.body.appendChild(chip);
+
+  const wrong = D.looksWrongTarget(chip);
+  check("чип «Поиск публикаций от …» опознаётся как не-ответ", wrong === true);
+
+  // Переход внутри SPA: адрес сменился, карточка исчезла, осталась строка поиска.
+  ctx.location.pathname = "/search";
+  ctx.location.search = "?from_author=sonya.goroshki";
+  page.body.childNodes = [];
+  const searchBox = buildSearchPage(page);
+
+  check("строка поиска никогда не считается полем для письма",
+    D.isSearchField(searchBox) === true && D.isWritableField(searchBox) === false,
+    `isSearchField=${D.isSearchField(searchBox)}`);
+
+  // Настоящее поле ответа в модалке — его писать можно.
+  const dlgField = new El("div", { contenteditable: "true", "aria-placeholder": "Ответьте пользователю lev_009__" });
+  dlgField.rect = { top: 300, left: 0, width: 500, height: 100 };
+  page.body.appendChild(new El("div", { role: "dialog" }, [dlgField]));
+  check("настоящее поле ответа при этом остаётся доступным",
+    D.isWritableField(dlgField) === true);
+
+  // И обратная проверка: поиск не подсовывается вместо композера поста.
+  const triggers = D.composerTriggers({
+    editable: 'div[contenteditable="true"], textarea',
+    composerTriggerLabels: ["что нового"],
+  });
+  check("строка поиска не предлагается как поле нового поста",
+    !triggers.some((t) => t.el === searchBox),
+    `целей: ${triggers.map((t) => t.why).join(", ") || "нет"}`);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -500,6 +560,7 @@ await composerCase("с /messages агент сам уходит на ленту"
 await composerCase("без ленты и навигации — честный отказ с адресом",
   { pathname: "/messages", feed: false, nav: false, expectReady: false });
 
+await searchTrapCase();
 await collectBudgetCase();
 await rpcRoutingCase();
 await toolsCases();

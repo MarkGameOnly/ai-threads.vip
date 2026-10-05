@@ -128,7 +128,11 @@
    * Приоритет: подсказка про ответ → первое видимое сверху.
    */
   function pickEditable(list) {
-    const vis = list.filter(visible);
+    // Строка поиска Threads — тоже contenteditable, и на странице поиска
+    // она оказывается единственным «полем» на экране. Комментарий,
+    // набранный в неё, никуда не уходит: см. dom.isSearchField.
+    const notSearch = (el) => !window.DST?.dom?.isSearchField?.(el);
+    const vis = list.filter((e) => visible(e) && notSearch(e));
     if (!vis.length) return null;
     const hinted = vis.find((e) => REPLY_HINT.test(hintOf(e)));
     if (hinted) return hinted;

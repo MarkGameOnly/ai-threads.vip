@@ -881,7 +881,9 @@
   }
 
   function findActiveEditable(sel) {
-    const isEditable = (el) => el && !isOurs(el) &&
+    // isSearchField: строка поиска Threads — тоже contenteditable, и без
+    // этой проверки она регулярно оказывалась «полем ответа».
+    const isEditable = (el) => el && !isOurs(el) && !isSearchField(el) &&
       (el.getAttribute?.("contenteditable") === "true" || el.tagName === "TEXTAREA");
     // Вьюпорт не требуется: форма ответа на странице поста стоит ниже ветки,
     // и проверка «на экране» отбрасывала её вместе со всем остальным.
@@ -1005,6 +1007,7 @@
     const add = (el, why, score) => {
       if (!el || isOurs(el) || !document.body.contains(el)) return;
       if (navigatesAway(el)) return;
+      if (isSearchField(el)) return;
       const r = el.getBoundingClientRect();
       if (r.width < 60 || r.height < 14) return;
       if (!isVisibleEl(el)) return;
@@ -1054,7 +1057,7 @@
   /** Уже отрисованный редактор где угодно на странице (даже ниже экрана). */
   function bareEditableTargets(sel) {
     return qsa(document, sel.editable)
-      .filter((e) => !isOurs(e) && document.body.contains(e) && isVisibleEl(e))
+      .filter((e) => !isOurs(e) && document.body.contains(e) && isWritableField(e))
       .map((el) => ({ el, why: "bare-editable" }));
   }
 
@@ -1171,9 +1174,11 @@
     const reacquire = async () => {
       const cont = containerByCode(code) || container;
       const f = window.DST.find?.replyFieldFor(cont, sel);
-      if (f && f.el && isVisibleEl(f.el)) return f.el;
-      const any = qs(document, sel.editable);
-      if (any && isVisibleEl(any)) return any;
+      if (f && f.el && isWritableField(f.el)) return f.el;
+      // qs() брал ПЕРВОЕ поле на странице. На странице поиска первое
+      // поле — это сама строка поиска, и комментарий уходил в неё.
+      const any = qsa(document, sel.editable).find(isWritableField);
+      if (any) return any;
       return findActiveEditable(sel);
     };
 
@@ -1182,7 +1187,7 @@
     // Открытое поле берём ТОЛЬКО если оно пустое. Иначе можно дописать свой
     // комментарий к чужому недописанному черновику — так в ленте оставались
     // склейки вида «… 😊 😊».
-    if (already && already.el && isVisibleEl(already.el) &&
+    if (already && already.el && isWritableField(already.el) &&
         !fieldText(already.el).trim()) {
       editable = already.el;
     } else if (document.querySelector('[role="dialog"]')) {
@@ -1195,6 +1200,20 @@
     // Открыть ответ: тактики по убыванию надёжности, с отчётом в лог.
     const onPostPage = /\/post\//.test(location.pathname);
     const tried = [];
+
+    // Адрес на момент старта. Любой уход с него означает, что мы кликнули
+    // не туда: настоящая кнопка «Ответить» открывает поле или окно, но
+    // страницу не меняет. Проверять href недостаточно — чип «Поиск
+    // публикаций от …» это role="button" без href, и переход он делает
+    // средствами самого приложения.
+    const startedAt = location.pathname + location.search;
+    const sameUrl = () => location.pathname + location.search === startedAt;
+    const comeBack = async () => {
+      try { history.back(); } catch {}
+      await waitFor(() => (sameUrl() ? true : null), 7000);
+      await sleep(900);
+      return sameUrl();
+    };
 
     const openReply = async () => {
       const cont = containerByCode(code) || container;
@@ -1232,6 +1251,15 @@
           continue;
         }
 
+        // Позиционные догадки («второй в строке», «после лайка», подсказка
+        // модели) не смотрят на подпись и попадали в чип «Поиск публикаций
+        // от …» и в «Подписаться». У кнопки ответа таких слов не бывает.
+        if (t.why !== "bare-editable" && looksWrongTarget(t.el)) {
+          const lbl2 = (t.el.getAttribute?.("aria-label") || t.el.innerText || "").trim().slice(0, 28);
+          tried.push(`${t.why}: пропущена («${lbl2}» — это не ответ)`);
+          continue;
+        }
+
         usedWhy = t.why;
 
         // Уже готовое поле — кликать по нему не нужно, только сфокусировать.
@@ -1248,16 +1276,31 @@
         else { try { t.el.click(); } catch {} }
 
         const got = await waitFor(async () => {
+          // Пока адрес не вернулся на место, никакое найденное поле не
+          // наше: на чужой странице поле всё равно найдётся — и это
+          // будет строка поиска.
+          if (!sameUrl()) return null;
           const el2 = await reacquire();
-          return el2 && isVisibleEl(el2) ? el2 : null;
+          return el2 && isWritableField(el2) ? el2 : null;
         }, 4500);
-        if (got) { tried.push(`${t.why}: сработала`); return got; }
+        if (got && sameUrl()) { tried.push(`${t.why}: сработала`); return got; }
+
+        if (!sameUrl()) {
+          const where = location.pathname;
+          step(`клик увёл на ${where} — возвращаюсь в ветку`);
+          const back = await comeBack();
+          tried.push(`${t.why}: увела на ${where}${back ? " (вернулся)" : " (вернуться не вышло)"}`);
+          if (!back) return null;        // ветку потеряли — лучше честно отказать
+          continue;
+        }
 
         tried.push(`${t.why}: поле не появилось`);
         await closeStrayPopovers();
         await sleep(400);
       }
-      return findActiveEditable(sel);
+      if (!sameUrl()) return null;
+      const last = findActiveEditable(sel);
+      return isWritableField(last) ? last : null;
     };
 
     // Два полных захода: если поле умерло насмерть, закрываем композер,
@@ -1366,6 +1409,66 @@
     } catch {}
   }
 
+  /* ══════════════════════════════════════════════════════════
+     ЧУЖИЕ ПОЛЯ: ПОИСК И НАВИГАЦИЯ
+
+     Отдельный случай, который стоил комментария в строке поиска.
+     Агент открыл ветку, но в строке действий поста кликнул по чипу
+     «Поиск публикаций от sonya.goroshki». Ссылки у чипа нет — это
+     role="button", — поэтому проверка «уведёт ли со страницы» (она
+     смотрит только на href) его пропустила. Threads перешёл на
+     /search внутри SPA, карточка поста исчезла, и поиск поля ответа
+     честно нашёл ЕДИНСТВЕННОЕ поле на новой странице — строку поиска.
+     Дальше туда лёг текст комментария, а Ctrl+Enter ничего не отправил.
+
+     Строка поиска Threads — не <input>, а contenteditable (внутри неё
+     живёт чип «Из автора»), поэтому обычный селектор редактируемых
+     полей её прекрасно видит. Значит нужен явный запрет. */
+  const SEARCH_HINT_RE =
+    /(поиск|искать|search|buscar|recherche|suche|cerca|szukaj|пошук)/i;
+
+  /** Поле поиска или другой элемент интерфейса, которому писать нельзя. */
+  function isSearchField(el) {
+    if (!el) return true;
+    try {
+      if (el.closest('[role="search"], form[role="search"], header, [role="banner"], nav, [role="navigation"]')) {
+        return true;
+      }
+      if (el.getAttribute?.("type") === "search") return true;
+      const hint = ["aria-label", "aria-placeholder", "placeholder", "data-placeholder", "name", "id"]
+        .map((a) => el.getAttribute?.(a) || "").join(" ");
+      if (SEARCH_HINT_RE.test(hint)) return true;
+      // Подпись может висеть не на самом поле, а на обёртке.
+      const box = el.parentElement?.parentElement;
+      const boxHint = box ? (box.getAttribute("aria-label") || box.getAttribute("role") || "") : "";
+      if (boxHint === "search" || SEARCH_HINT_RE.test(boxHint)) return true;
+      // Страница поиска: вся её верхняя полоса — чужая территория.
+      if (/^\/search/.test(location.pathname) &&
+          el.getBoundingClientRect().top < 140) return true;
+    } catch {}
+    return false;
+  }
+
+  /** Поле, в которое агенту можно писать: видимое, наше по смыслу, не поиск. */
+  function isWritableField(el) {
+    return !!el && isVisibleEl(el) && !isSearchField(el);
+  }
+
+  /**
+   * Подписи, которых у кнопки «Ответить» не бывает никогда.
+   * Нужны для позиционных догадок (второй в строке, после лайка,
+   * подсказка модели): они не смотрят на текст и легко попадают в чип
+   * поиска, кнопку «Подписаться» или пункт меню «Пожаловаться».
+   */
+  const WRONG_TARGET_RE =
+    /(поиск|искать|search|подпис|follow|профил|profile|поделит|share|репост|repost|перевод|translat|пожалова|report|заблокир|block|скрыт|hide|сохранит|save|копиров|copy|ссылк|link|встроит|embed|пометк|mute|^ещё$|^еще$|\bmore options\b)/i;
+
+  function looksWrongTarget(el) {
+    if (!el) return true;
+    const t = ((el.getAttribute?.("aria-label") || "") + " " + (el.innerText || "")).trim().slice(0, 60);
+    return WRONG_TARGET_RE.test(t);
+  }
+
   function isVisibleEl(el) {
     if (!el || isOurs(el) || !document.body.contains(el)) return false;
     const r = el.getBoundingClientRect();
@@ -1410,13 +1513,13 @@
     // самый «верхний» диалог — последний в DOM
     for (let i = dialogs.length - 1; i >= 0; i--) {
       const e = qsa(dialogs[i], '[contenteditable="true"], textarea')
-        .filter((x) => isVisibleEl(x) && !window.DST.ours?.isOurs(x))[0];
+        .filter((x) => isWritableField(x) && !window.DST.ours?.isOurs(x))[0];
       if (e) return e;
     }
     const found = window.DST.find?.composerField(sel);
-    if (found?.el && isVisibleEl(found.el)) return found.el;
+    if (found?.el && isWritableField(found.el)) return found.el;
     const page = qsa(document, sel.editable)
-      .filter((x) => isVisibleEl(x) && !window.DST.ours?.isOurs(x));
+      .filter((x) => isWritableField(x) && !window.DST.ours?.isOurs(x));
     // из полей страницы берём самое крупное: у настоящего композера
     // площадь заметно больше, чем у однострочной заглушки
     page.sort((a, b) => {
@@ -1501,7 +1604,8 @@
       if (isOurs(el) || !isVisibleEl(el)) continue;
       if (el.closest('[role="dialog"]')) continue;
       if (fieldText(el).trim()) continue;
-      if (/\/messages/.test(location.pathname)) continue;   // это поле Директа
+      if (isSearchField(el)) continue;                        // строка поиска
+      if (/\/messages/.test(location.pathname)) continue;     // поле Директа
       add(el, "поле на странице", 2);
     }
 
@@ -2128,6 +2232,7 @@
     editableAlive, waitEditableStable, typeInto,
     composerScope, composerField, nearEditable, replyPromptTargets, bareEditableTargets,
     composerTriggers, ensureComposer, homeLink,
+    isSearchField, isWritableField, looksWrongTarget,
     countReplies,
   };
 })();
