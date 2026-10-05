@@ -34,19 +34,90 @@ async function slotTime(slot) {
   return t.getTime();
 }
 
+const THREADS_RE = /https:\/\/([a-z0-9-]+\.)?threads\.(com|net)\//i;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Порядок повторяет manifest.json — иначе модули не найдут друг друга.
+const CONTENT_FILES = [
+  "src/content/threads-resolve.js",
+  "src/content/threads-dom.js",
+  "src/content/threads-aim.js",
+  "src/content/threads-find.js",
+  "src/content/threads-engine.js",
+  "src/content/threads-rpc.js",
+  "src/content/sheet.js",
+  "src/content/threads-panel.js",
+];
+
+/** Сообщение во вкладку с таймаутом и без «Unchecked runtime.lastError». */
+function tabMsg(tabId, payload, timeout = 30000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve({ ok: false, error: "timeout" }); } }, timeout);
+    try {
+      chrome.tabs.sendMessage(tabId, payload, (r) => {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        const err = chrome.runtime.lastError;
+        resolve(err ? { ok: false, error: err.message } : (r || { ok: false, error: "пустой ответ" }));
+      });
+    } catch (e) {
+      if (!done) { done = true; clearTimeout(timer); resolve({ ok: false, error: e?.message || String(e) }); }
+    }
+  });
+}
+
+async function wakeTab(tabId) {
+  for (let i = 0; i < 40; i++) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t) return false;
+    if (t.status === "complete") break;
+    await sleepMs(500);
+  }
+  if ((await tabMsg(tabId, { type: "RPC_PING" }, 2500)).ok) return true;
+  try { await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES }); }
+  catch { return false; }
+  for (let i = 0; i < 12; i++) {
+    await sleepMs(400);
+    if ((await tabMsg(tabId, { type: "RPC_PING" }, 2000)).ok) return true;
+  }
+  return false;
+}
+
+/**
+ * Опубликовать запланированный пост.
+ *
+ * Что здесь чинилось. Раньше бралась ПЕРВАЯ вкладка Threads из
+ * chrome.tabs.query({}) — список не упорядочен, а выгруженная браузером
+ * вкладка выглядит в нём как обычная, хотя content script там мёртв.
+ * Сообщение уходило в никуда, ответ приходил пустой, и планировщик
+ * сообщал «не удалось» без причины. Вторая беда: вкладку никто не уводил
+ * на ленту, а ночной пост по расписанию легко заставал её на /messages
+ * или на чужой ветке — там композера нет, и публикация падала с
+ * «не появился композер».
+ */
 async function publishScheduled(item) {
   const s = await getSettings();
-  const THREADS_RE = /https:\/\/([a-z0-9-]+\.)?threads\.(com|net)\//i;
-  let tabs = await chrome.tabs.query({});
-  let tab = tabs.find((t) => THREADS_RE.test(t.url || ""));
+  const all = (await chrome.tabs.query({})).filter((t) => THREADS_RE.test(t.url || ""));
+  const live = all.filter((t) => !t.discarded && t.status !== "unloaded");
+  let tab = (live.length ? live : all)[0];
   if (!tab) tab = await chrome.tabs.create({ url: "https://www.threads.com/", active: false });
-  // дождаться готовности
-  for (let i = 0; i < 30; i++) {
-    const t = await chrome.tabs.get(tab.id).catch(() => null);
-    if (t && t.status === "complete") break;
-    await new Promise((r) => setTimeout(r, 500));
+
+  if (!(await wakeTab(tab.id))) {
+    return { ok: false, error: "вкладка Threads не отвечает (выгружена браузером)" };
   }
-  await new Promise((r) => setTimeout(r, 1500));
+
+  // Композер есть не на каждой странице. Сначала просим саму страницу
+  // перейти на ленту внутри SPA, и только если не вышло — навигируем.
+  const probe = await tabMsg(tab.id, { type: "RPC_COMPOSER_READY" }, 25000);
+  if (!probe.ok || !probe.ready) {
+    await chrome.tabs.update(tab.id, { url: "https://www.threads.com/" }).catch(() => {});
+    await sleepMs(2000);
+    if (!(await wakeTab(tab.id))) {
+      return { ok: false, error: "лента Threads не открылась — публикация пропущена" };
+    }
+  }
+
   // Режим хранится в самой записи: человек мог поставить один пост на
   // автопубликацию, а другой — на ручную. Раньше брался общий режим
   // комментирования, и выбор в планировщике игнорировался.
@@ -56,9 +127,7 @@ async function publishScheduled(item) {
   // не лёг черновиком, который некому подтвердить.
   const mode = item.serverId ? "auto"
     : (item.mode || (s.commentMode === "auto" ? "auto" : "manual")) === "auto" ? "auto" : "manual";
-  return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tab.id, { type: "RPC_POST", text: item.text, file: item.file || null, mode }, (r) => resolve(r || { ok: false }));
-  });
+  return tabMsg(tab.id, { type: "RPC_POST", text: item.text, file: item.file || null, mode }, 180000);
 }
 
 /**
@@ -416,7 +485,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         default: sendResponse({ ok: false, error: "unknown: " + msg?.type });
       }
     } catch (e) {
-      sendResponse({ ok: false, error: e.message || String(e), status: e instanceof AIError ? e.status : undefined });
+      // kind/buyUrl обязательны: через sendMessage едет только простой
+      // объект, класс ошибки теряется. Без них панель не могла отличить
+      // «кончились генерации» (надо показать карточку VIP и остановить
+      // отбор) от обычного сбоя сети (надо повторить) — и охотник в обоих
+      // случаях просто падал молча.
+      sendResponse({
+        ok: false,
+        error: e.message || String(e),
+        status: e instanceof AIError ? e.status : undefined,
+        kind: e?.name || "Error",
+        retryable: !!e?.retryable,
+        buyUrl: e?.buyUrl || "",
+      });
     }
   })();
   return true;

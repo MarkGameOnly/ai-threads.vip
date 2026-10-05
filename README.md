@@ -55,7 +55,34 @@ src/content/     threads-dom.js (metrics/parsing), threads-rpc.js (automation en
 src/sidepanel/   panel.* — the chat brain, tools.js, tab-control.js
 src/options/     settings and presets UI
 src/popup/       toolbar popup
+tests/           hunter-smoke.mjs — Client Hunter regression test (Node, no network)
 ```
+
+## Tests
+
+```bash
+node tests/hunter-smoke.mjs
+```
+
+Runs the whole Client Hunter pipeline against stubbed Chrome APIs and a stubbed
+model. It covers the ways the run used to die silently on step 4 ("lead
+qualification") and never reach step 5 ("comment on the chosen threads"):
+the model stalling, `429`, generations running out mid-run, JSON wrapped in
+prose, the Threads tab being closed, and the background worker not answering.
+In every case the program must finish and, when leads exist, actually post
+comments. No network access and no real Threads session are involved.
+
+```bash
+node tests/post-smoke.mjs
+```
+
+Covers publishing, replying and profile analysis against a miniature DOM:
+the composer being found on its own (including walking back to the feed from
+`/messages`, where there is no composer at all), the collector honouring its
+time budget instead of blowing the RPC timeout, `threads-rpc.js` no longer
+answering `unknown rpc` to messages that belong to another listener, the
+autoposter replying immediately instead of after the whole loop, and replying
+to a thread even when the post card cannot be identified by its code.
 
 ## Support
 

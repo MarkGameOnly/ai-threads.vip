@@ -109,7 +109,37 @@
   }
 
   // ---- RPC (команды извне) ----
+  /**
+   * Типы, на которые отвечает ИМЕННО этот модуль.
+   *
+   * ПОЧЕМУ ЭТО ВАЖНО. В одной вкладке Threads живут четыре слушателя
+   * chrome.runtime.onMessage: этот, sheet.js (SHEET_*), threads-dom.js
+   * (PANEL_OVERLAY_*) и threads-panel.js (RPC_PANEL_ACT). Chrome
+   * доставляет сообщение ВСЕМ слушателям, а отправителю отдаёт ПЕРВЫЙ
+   * пришедший ответ. Раньше здесь внизу стоял
+   *     default: sendResponse({ ok: false, error: "unknown rpc" })
+   * — то есть этот модуль отвечал и на чужие сообщения тоже. В manifest
+   * он подключается раньше threads-panel.js, поэтому его отказ приходил
+   * первым и затирал настоящий ответ.
+   *
+   * Наружу это выглядело как «✕ unknown rpc» на каждое нажатие
+   * «Авто/Вручную» в боковой панели — при том, что режим на самом деле
+   * переключался: ошибку печатал один слушатель, а работу делал другой.
+   *
+   * Теперь чужие типы пропускаются молча (возвращаем undefined, канал
+   * остаётся открытым для настоящего адресата).
+   */
+  const OWNED = new Set([
+    "RPC_PING", "RPC_COLLECT", "RPC_HEALTH", "RPC_WAIT_POST", "RPC_COMMENT",
+    "RPC_LIKE", "RPC_GEN_COMMENT", "RPC_POST", "RPC_COMPOSER_READY",
+    "RPC_DM_SCAN", "RPC_DM_OPEN", "RPC_DM_READ", "RPC_DM_HISTORY", "RPC_DM_ROLES",
+    "RPC_DM_SEND", "RPC_DM_DRAFT", "RPC_DM_FROM_PROFILE", "RPC_DM_BACK",
+    "RPC_DIAGNOSE", "RPC_SEND_PENDING", "RPC_REPORT",
+    "START_COMMENTING", "STOP_COMMENTING", "START_POSTING", "STOP_POSTING",
+  ]);
+
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || !OWNED.has(msg.type)) return;   // чужое сообщение — отвечает другой слушатель
     (async () => {
       try {
         const s = await getSettings();
@@ -119,14 +149,28 @@
             break;
           case "RPC_COLLECT": {
             const want = msg.target || s.parseTarget;
+            // Бюджет времени приходит от вызывающего и ВСЕГДА меньше его
+            // собственного таймаута. Без него сбор мог идти дольше 60 с
+            // (на профиле — обычное дело: постов меньше, чем просили, и
+            // цикл досиживает восемь «пустых» прокруток по 4,5 с), панель
+            // обрывала ожидание и показывала голое «ОШИБКА timeout»,
+            // выбрасывая уже собранные посты. Теперь по истечении бюджета
+            // отдаём то, что успели: частичный сбор полезнее пустоты.
+            const budget = Math.max(5000, Number(msg.budgetMs) || 110000);
+            const started = Date.now();
             const posts = await dom().collectPosts(
               s.sel, want, s.parseMaxScrolls,
-              (n, t) => log(`Собрано ${n}/${t}`)
+              (n, t) => log(`Собрано ${n}/${t}`),
+              null, budget
             );
+            const spent = Date.now() - started;
+            const partial = posts.length < want && spent >= budget - 1500;
             if (posts.length < want) {
-              log(`Лента отдала ${posts.length} из ${want} — дальше постов нет`, "err");
+              log(partial
+                ? `Время вышло (${Math.round(spent / 1000)} с): собрано ${posts.length} из ${want}`
+                : `Лента отдала ${posts.length} из ${want} — дальше постов нет`, "err");
             }
-            sendResponse({ ok: true, posts, requested: want,
+            sendResponse({ ok: true, posts, requested: want, partial,
                            reached: posts.length, url: location.href });
             break;
           }
@@ -167,7 +211,13 @@
           }
           case "RPC_COMMENT": {
             const like = msg.like != null ? msg.like : s.likeOnComment;
-            const r = await dom().commentOnPost(msg.code, msg.text, s.sel, msg.mode || s.commentMode, { like });
+            // onStep раньше не передавали, и весь разбор «что именно не
+            // вышло» (какую цель пробовали, где потерялось поле) оседал
+            // внутри функции и терялся. Снаружи это выглядело так, будто
+            // агент открыл ветку и молча ушёл.
+            const r = await dom().commentOnPost(
+              msg.code, msg.text, s.sel, msg.mode || s.commentMode,
+              { like, onStep: (m) => log("· " + m) });
             sendResponse(r);
             break;
           }
@@ -182,8 +232,19 @@
             break;
           }
           case "RPC_POST": {
-            const r = await dom().createPost(msg.text, s.sel, msg.mode || "review", msg.file || null);
+            const r = await dom().createPost(msg.text, s.sel, msg.mode || "review", msg.file || null,
+                                             { onStep: (m) => log("· " + m) });
             sendResponse(r);
+            break;
+          }
+          // Есть ли на ТЕКУЩЕЙ странице то, из чего можно открыть
+          // композер. Боковая панель спрашивает это перед постингом и,
+          // если ответ «нет», сама уводит вкладку на ленту — content
+          // script не может навигировать себя, не убив при этом RPC.
+          case "RPC_COMPOSER_READY": {
+            const r = await dom().ensureComposer(s.sel, { open: false,
+                                                          onStep: (m) => log("· " + m) });
+            sendResponse({ ok: true, ...r, url: location.href });
             break;
           }
           case "RPC_DM_SCAN":
@@ -266,10 +327,40 @@
     return !stop.post;
   }
 
+  /**
+   * Запуск автопостинга.
+   *
+   * ПОЧЕМУ ОТВЕТ ОТДАЁТСЯ СРАЗУ. Раньше здесь было
+   * `sendResponse(await startPosting())`, а startPosting() возвращался
+   * только когда цикл заканчивался — то есть через часы, после «Стоп».
+   * Для плавающей панели это незаметно (клик ничего не ждёт), а вот
+   * боковая панель ждала ответ на RPC_PANEL_ACT и не получала его
+   * никогда: кнопка «ПОСТ» оставалась заблокированной до перезагрузки.
+   *
+   * Теперь проверки, которые должны быть видны человеку немедленно
+   * (уже идёт? есть ли темы? не исчерпан ли лимит?), делаются до
+   * запуска и возвращаются как результат, а сам цикл живёт сам по себе.
+   */
   async function startPosting() {
     if (running.post) return { ok: false, error: "автопост уже идёт" };
+
+    const s0 = await getSettings();
+    if (!(s0.postTopics || []).length) {
+      return { ok: false, error: "очередь тем пуста — добавьте темы в настройках" };
+    }
+    const c0 = (await sw("GET_COUNTERS")).counters;
+    if (c0 && c0.posts >= s0.maxPostsPerDay) {
+      return { ok: false, error: `лимит постов на сегодня исчерпан (${s0.maxPostsPerDay})` };
+    }
+
     running.post = true; stop.post = false;
     log("▶️ Автопостинг запущен", "ok");
+    // Намеренно без await: цикл идёт часами, ответ нужен сейчас.
+    postLoop();
+    return { ok: true, started: true };
+  }
+
+  async function postLoop() {
     try {
       while (!stop.post) {
         const s = await getSettings();
@@ -301,7 +392,12 @@
         log(`📝 «${topic}»:\n${finalText}`);
 
         const mode = s.commentMode === "manual" ? "manual" : "auto";
-        const r = await dom().createPost(finalText, s.sel, mode);
+        // createPost сам найдёт, чем открыть композер, и при нужде уйдёт
+        // на ленту переходом внутри SPA: автопост запускают и уходят, а
+        // вкладка к этому моменту может стоять где угодно — на /messages
+        // после Директа, на чужом посте после комментария.
+        const r = await dom().createPost(finalText, s.sel, mode, null,
+                                         { onStep: (m) => log("· " + m) });
         await sw("SHIFT_TOPIC");
 
         if (r.sent) {
@@ -329,7 +425,6 @@
     } catch (e) {
       log("Автопостинг упал: " + (e.message || e), "err");
     } finally { running.post = false; log("⏹ Автопостинг остановлен"); }
-    return { ok: true };
   }
 
   window.DST.rpc = {

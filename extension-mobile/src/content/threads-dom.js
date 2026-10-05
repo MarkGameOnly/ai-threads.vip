@@ -225,13 +225,28 @@
    * «расшевеливаем» прыжком вниз и кнопкой догрузки. Сдаёмся после 8
    * безрезультатных попыток и честно сообщаем, сколько собрали.
    */
-  async function collectPosts(sel, target = 50, maxScrolls = 0, onProgress, shouldStop) {
+  /**
+   * Сбор постов прокруткой.
+   *
+   * budgetMs — предел по времени. Он появился из-за «ОШИБКА timeout» при
+   * разборе профиля: постов у автора меньше, чем просили, цикл честно
+   * досиживал восемь холостых прокруток с паузами до 4,5 с, в сумме
+   * выходило за минуту — и сторона, которая ждала ответ, обрывала RPC
+   * вместе с уже собранными постами. Ограничение по времени здесь, а не
+   * только снаружи: вернуть 23 поста из 40 гораздо полезнее, чем не
+   * вернуть ничего.
+   */
+  async function collectPosts(sel, target = 50, maxScrolls = 0, onProgress, shouldStop, budgetMs = 0) {
     const byCode = new Map();
     target = Math.max(1, Number(target) || 50);
     const cap = Math.max(60, Number(maxScrolls) || 0, target * 3);
+    const deadline = Number(budgetMs) > 0 ? Date.now() + Number(budgetMs) : Infinity;
     let stagnation = 0;
     let scrolls = 0;
-    const stop = () => { try { return !!(shouldStop && shouldStop()); } catch { return false; } };
+    const stop = () => {
+      if (Date.now() >= deadline) return true;
+      try { return !!(shouldStop && shouldStop()); } catch { return false; }
+    };
 
     const soak = () => {
       for (const p of parseVisiblePosts(sel)) if (!byCode.has(p.code)) byCode.set(p.code, p);
@@ -252,6 +267,9 @@
 
       if (byCode.size === before) {
         stagnation++;
+        // «Расшевеливающие» приёмы ниже стоят ещё до 6 секунд сверху —
+        // если бюджет уже вышел, выходим сразу, а не добираем их.
+        if (Date.now() >= deadline) break;
         if (stagnation === 2) {
           window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
           await sleep(1500); soak();
@@ -863,7 +881,9 @@
   }
 
   function findActiveEditable(sel) {
-    const isEditable = (el) => el && !isOurs(el) &&
+    // isSearchField: строка поиска Threads — тоже contenteditable, и без
+    // этой проверки она регулярно оказывалась «полем ответа».
+    const isEditable = (el) => el && !isOurs(el) && !isSearchField(el) &&
       (el.getAttribute?.("contenteditable") === "true" || el.tagName === "TEXTAREA");
     // Вьюпорт не требуется: форма ответа на странице поста стоит ниже ветки,
     // и проверка «на экране» отбрасывала её вместе со всем остальным.
@@ -987,6 +1007,7 @@
     const add = (el, why, score) => {
       if (!el || isOurs(el) || !document.body.contains(el)) return;
       if (navigatesAway(el)) return;
+      if (isSearchField(el)) return;
       const r = el.getBoundingClientRect();
       if (r.width < 60 || r.height < 14) return;
       if (!isVisibleEl(el)) return;
@@ -1036,7 +1057,7 @@
   /** Уже отрисованный редактор где угодно на странице (даже ниже экрана). */
   function bareEditableTargets(sel) {
     return qsa(document, sel.editable)
-      .filter((e) => !isOurs(e) && document.body.contains(e) && isVisibleEl(e))
+      .filter((e) => !isOurs(e) && document.body.contains(e) && isWritableField(e))
       .map((el) => ({ el, why: "bare-editable" }));
   }
 
@@ -1153,9 +1174,11 @@
     const reacquire = async () => {
       const cont = containerByCode(code) || container;
       const f = window.DST.find?.replyFieldFor(cont, sel);
-      if (f && f.el && isVisibleEl(f.el)) return f.el;
-      const any = qs(document, sel.editable);
-      if (any && isVisibleEl(any)) return any;
+      if (f && f.el && isWritableField(f.el)) return f.el;
+      // qs() брал ПЕРВОЕ поле на странице. На странице поиска первое
+      // поле — это сама строка поиска, и комментарий уходил в неё.
+      const any = qsa(document, sel.editable).find(isWritableField);
+      if (any) return any;
       return findActiveEditable(sel);
     };
 
@@ -1164,7 +1187,7 @@
     // Открытое поле берём ТОЛЬКО если оно пустое. Иначе можно дописать свой
     // комментарий к чужому недописанному черновику — так в ленте оставались
     // склейки вида «… 😊 😊».
-    if (already && already.el && isVisibleEl(already.el) &&
+    if (already && already.el && isWritableField(already.el) &&
         !fieldText(already.el).trim()) {
       editable = already.el;
     } else if (document.querySelector('[role="dialog"]')) {
@@ -1177,6 +1200,20 @@
     // Открыть ответ: тактики по убыванию надёжности, с отчётом в лог.
     const onPostPage = /\/post\//.test(location.pathname);
     const tried = [];
+
+    // Адрес на момент старта. Любой уход с него означает, что мы кликнули
+    // не туда: настоящая кнопка «Ответить» открывает поле или окно, но
+    // страницу не меняет. Проверять href недостаточно — чип «Поиск
+    // публикаций от …» это role="button" без href, и переход он делает
+    // средствами самого приложения.
+    const startedAt = location.pathname + location.search;
+    const sameUrl = () => location.pathname + location.search === startedAt;
+    const comeBack = async () => {
+      try { history.back(); } catch {}
+      await waitFor(() => (sameUrl() ? true : null), 7000);
+      await sleep(900);
+      return sameUrl();
+    };
 
     const openReply = async () => {
       const cont = containerByCode(code) || container;
@@ -1214,6 +1251,15 @@
           continue;
         }
 
+        // Позиционные догадки («второй в строке», «после лайка», подсказка
+        // модели) не смотрят на подпись и попадали в чип «Поиск публикаций
+        // от …» и в «Подписаться». У кнопки ответа таких слов не бывает.
+        if (t.why !== "bare-editable" && looksWrongTarget(t.el)) {
+          const lbl2 = (t.el.getAttribute?.("aria-label") || t.el.innerText || "").trim().slice(0, 28);
+          tried.push(`${t.why}: пропущена («${lbl2}» — это не ответ)`);
+          continue;
+        }
+
         usedWhy = t.why;
 
         // Уже готовое поле — кликать по нему не нужно, только сфокусировать.
@@ -1230,16 +1276,31 @@
         else { try { t.el.click(); } catch {} }
 
         const got = await waitFor(async () => {
+          // Пока адрес не вернулся на место, никакое найденное поле не
+          // наше: на чужой странице поле всё равно найдётся — и это
+          // будет строка поиска.
+          if (!sameUrl()) return null;
           const el2 = await reacquire();
-          return el2 && isVisibleEl(el2) ? el2 : null;
+          return el2 && isWritableField(el2) ? el2 : null;
         }, 4500);
-        if (got) { tried.push(`${t.why}: сработала`); return got; }
+        if (got && sameUrl()) { tried.push(`${t.why}: сработала`); return got; }
+
+        if (!sameUrl()) {
+          const where = location.pathname;
+          step(`клик увёл на ${where} — возвращаюсь в ветку`);
+          const back = await comeBack();
+          tried.push(`${t.why}: увела на ${where}${back ? " (вернулся)" : " (вернуться не вышло)"}`);
+          if (!back) return null;        // ветку потеряли — лучше честно отказать
+          continue;
+        }
 
         tried.push(`${t.why}: поле не появилось`);
         await closeStrayPopovers();
         await sleep(400);
       }
-      return findActiveEditable(sel);
+      if (!sameUrl()) return null;
+      const last = findActiveEditable(sel);
+      return isWritableField(last) ? last : null;
     };
 
     // Два полных захода: если поле умерло насмерть, закрываем композер,
@@ -1348,6 +1409,66 @@
     } catch {}
   }
 
+  /* ══════════════════════════════════════════════════════════
+     ЧУЖИЕ ПОЛЯ: ПОИСК И НАВИГАЦИЯ
+
+     Отдельный случай, который стоил комментария в строке поиска.
+     Агент открыл ветку, но в строке действий поста кликнул по чипу
+     «Поиск публикаций от sonya.goroshki». Ссылки у чипа нет — это
+     role="button", — поэтому проверка «уведёт ли со страницы» (она
+     смотрит только на href) его пропустила. Threads перешёл на
+     /search внутри SPA, карточка поста исчезла, и поиск поля ответа
+     честно нашёл ЕДИНСТВЕННОЕ поле на новой странице — строку поиска.
+     Дальше туда лёг текст комментария, а Ctrl+Enter ничего не отправил.
+
+     Строка поиска Threads — не <input>, а contenteditable (внутри неё
+     живёт чип «Из автора»), поэтому обычный селектор редактируемых
+     полей её прекрасно видит. Значит нужен явный запрет. */
+  const SEARCH_HINT_RE =
+    /(поиск|искать|search|buscar|recherche|suche|cerca|szukaj|пошук)/i;
+
+  /** Поле поиска или другой элемент интерфейса, которому писать нельзя. */
+  function isSearchField(el) {
+    if (!el) return true;
+    try {
+      if (el.closest('[role="search"], form[role="search"], header, [role="banner"], nav, [role="navigation"]')) {
+        return true;
+      }
+      if (el.getAttribute?.("type") === "search") return true;
+      const hint = ["aria-label", "aria-placeholder", "placeholder", "data-placeholder", "name", "id"]
+        .map((a) => el.getAttribute?.(a) || "").join(" ");
+      if (SEARCH_HINT_RE.test(hint)) return true;
+      // Подпись может висеть не на самом поле, а на обёртке.
+      const box = el.parentElement?.parentElement;
+      const boxHint = box ? (box.getAttribute("aria-label") || box.getAttribute("role") || "") : "";
+      if (boxHint === "search" || SEARCH_HINT_RE.test(boxHint)) return true;
+      // Страница поиска: вся её верхняя полоса — чужая территория.
+      if (/^\/search/.test(location.pathname) &&
+          el.getBoundingClientRect().top < 140) return true;
+    } catch {}
+    return false;
+  }
+
+  /** Поле, в которое агенту можно писать: видимое, наше по смыслу, не поиск. */
+  function isWritableField(el) {
+    return !!el && isVisibleEl(el) && !isSearchField(el);
+  }
+
+  /**
+   * Подписи, которых у кнопки «Ответить» не бывает никогда.
+   * Нужны для позиционных догадок (второй в строке, после лайка,
+   * подсказка модели): они не смотрят на текст и легко попадают в чип
+   * поиска, кнопку «Подписаться» или пункт меню «Пожаловаться».
+   */
+  const WRONG_TARGET_RE =
+    /(поиск|искать|search|подпис|follow|профил|profile|поделит|share|репост|repost|перевод|translat|пожалова|report|заблокир|block|скрыт|hide|сохранит|save|копиров|copy|ссылк|link|встроит|embed|пометк|mute|^ещё$|^еще$|\bmore options\b)/i;
+
+  function looksWrongTarget(el) {
+    if (!el) return true;
+    const t = ((el.getAttribute?.("aria-label") || "") + " " + (el.innerText || "")).trim().slice(0, 60);
+    return WRONG_TARGET_RE.test(t);
+  }
+
   function isVisibleEl(el) {
     if (!el || isOurs(el) || !document.body.contains(el)) return false;
     const r = el.getBoundingClientRect();
@@ -1392,13 +1513,13 @@
     // самый «верхний» диалог — последний в DOM
     for (let i = dialogs.length - 1; i >= 0; i--) {
       const e = qsa(dialogs[i], '[contenteditable="true"], textarea')
-        .filter((x) => isVisibleEl(x) && !window.DST.ours?.isOurs(x))[0];
+        .filter((x) => isWritableField(x) && !window.DST.ours?.isOurs(x))[0];
       if (e) return e;
     }
     const found = window.DST.find?.composerField(sel);
-    if (found?.el && isVisibleEl(found.el)) return found.el;
+    if (found?.el && isWritableField(found.el)) return found.el;
     const page = qsa(document, sel.editable)
-      .filter((x) => isVisibleEl(x) && !window.DST.ours?.isOurs(x));
+      .filter((x) => isWritableField(x) && !window.DST.ours?.isOurs(x));
     // из полей страницы берём самое крупное: у настоящего композера
     // площадь заметно больше, чем у однострочной заглушки
     page.sort((a, b) => {
@@ -1408,30 +1529,184 @@
     return page[0] || findActiveEditable(sel);
   }
 
-  async function createPost(text, sel, mode, file) {
-    const trigger = findButtonByLabels(document.body, sel.composerTriggerLabels);
-    if (trigger?.click) {
-      if (window.DST.aim) await window.DST.aim.click(trigger);
-      else trigger.click();
+  /* ══════════════════════════════════════════════════════════
+     ОТКРЫТИЕ КОМПОЗЕРА
+
+     Раньше createPost() делал ровно одно движение: findButtonByLabels по
+     словарю composerTriggerLabels. Этого хватало только на ленте и
+     только пока Threads рисовал «Что нового?» кнопкой.
+
+     На практике ломалось постоянно, и всегда одинаково: автопост шёл
+     следом за Директом, вкладка стояла на /messages — страницы, где
+     композера нет вовсе. Пользователь видел
+         «не появился композер (диалогов на странице 0, полей ввода 0)»
+     и ничего не мог с этим сделать: ошибка описывала симптом, а не
+     причину (мы не на той странице).
+
+     Теперь порядок такой:
+       1) ищем, чем открыть композер, ШИРЕ словаря — по aria-label, по
+          тексту обычных <div> (Threads рисует строку «Что нового?»
+          именно так) и по кнопке «Создать» в навигации;
+       2) если на странице открывать нечего — сами уходим на ленту
+          ПЕРЕХОДОМ ВНУТРИ SPA (клик по ссылке «Главная»). Это важно:
+          location.href = … перезагрузил бы страницу и убил content
+          script посреди RPC, то есть пост бы потерялся;
+       3) только потом сдаёмся — и пишем, что именно не нашлось.
+     ══════════════════════════════════════════════════════════ */
+
+  const COMPOSER_TEXT_RE =
+    /^(что нового|что у вас нового|начните ветку|начать ветку|создать|создать ветку|new thread|start a thread|what's new|what’s new|write something|نشر)/i;
+  const HOME_LABEL_RE = /^(главная|домой|лента|home|feed|início|inicio|accueil|startseite)$/i;
+
+  /** Чем можно открыть композер на ТЕКУЩЕЙ странице, лучшие — первыми. */
+  function composerTriggers(sel) {
+    const found = new Map();
+    const add = (el, why, score) => {
+      if (!el || isOurs(el) || !document.body.contains(el)) return;
+      if (!isVisibleEl(el)) return;
+      // Ссылка на другую страницу убьёт content script посреди работы.
+      if (navigatesAway(el)) return;
+      const prev = found.get(el);
+      if (!prev || score > prev.score) found.set(el, { el, why, score });
+    };
+
+    // 1) Словарь из настроек — как было, самый точный сигнал.
+    const dict = findButtonByLabels(document.body, sel.composerTriggerLabels || []);
+    if (dict) add(dict, "словарь", 5);
+
+    // 2) aria-label / placeholder: «Создать», «Create», «Что нового?».
+    for (const el of qsa(document, "[aria-label], [aria-placeholder], [data-placeholder], [placeholder]")) {
+      const hint = (el.getAttribute("aria-label") || el.getAttribute("aria-placeholder") ||
+                    el.getAttribute("data-placeholder") || el.getAttribute("placeholder") || "").trim();
+      if (!hint || hint.length > 40) continue;
+      if (COMPOSER_TEXT_RE.test(hint)) add(el, "подсказка", 4);
     }
 
-    // Ждём именно открытия диалога, а не появления любого поля: поле
-    // «Что нового?» на странице есть всегда, и ожидание завершалось
-    // мгновенно ещё до того, как окно композера успевало открыться.
-    await waitFor(() => qsa(document, '[role="dialog"]').filter(isVisibleEl)[0] || null, 5000);
+    // 3) Строка «Что нового?» обычным <div> — ровно та же история, что
+    //    и с формой ответа: ни role, ни placeholder, только текст.
+    for (const el of qsa(document, "div, span, p")) {
+      if (isOurs(el)) continue;
+      const t = (el.textContent || "").trim();
+      if (!t || t.length > 40) continue;
+      if (!COMPOSER_TEXT_RE.test(t)) continue;
+      let deepest = el, guard = 0;
+      while (guard++ < 5) {
+        const kid = Array.prototype.find.call(deepest.children || [],
+          (c) => (c.textContent || "").trim() === t);
+        if (!kid) break;
+        deepest = kid;
+      }
+      add(clickableHost(deepest), "строка композера", 3);
+    }
 
-    let editable = await waitFor(() => {
+    // 4) Пустое поле ввода прямо на странице (встроенный композер).
+    for (const el of qsa(document, sel.editable)) {
+      if (isOurs(el) || !isVisibleEl(el)) continue;
+      if (el.closest('[role="dialog"]')) continue;
+      if (fieldText(el).trim()) continue;
+      if (isSearchField(el)) continue;                        // строка поиска
+      if (/\/messages/.test(location.pathname)) continue;     // поле Директа
+      add(el, "поле на странице", 2);
+    }
+
+    return Array.from(found.values()).sort((a, b) => b.score - a.score).slice(0, 5);
+  }
+
+  /** Ссылка «Главная» в навигации — переход без перезагрузки страницы. */
+  function homeLink() {
+    const cands = [
+      ...qsa(document, 'a[href="/"], a[href="/?"], a[href="https://www.threads.com/"], a[href="https://www.threads.net/"]'),
+      ...qsa(document, '[aria-label], [role="link"]').filter((el) =>
+        HOME_LABEL_RE.test((el.getAttribute("aria-label") || "").trim())),
+    ];
+    return cands.find((el) => el && !isOurs(el) && isVisibleEl(el)) || null;
+  }
+
+  /**
+   * Убедиться, что композер открыть есть чем, и (по просьбе) открыть его.
+   * Возвращает { ready, opened, why, where, error } — без исключений:
+   * вызывающему нужен диагноз, а не стек.
+   */
+  async function ensureComposer(sel, opts = {}) {
+    const step = opts.onStep || (() => {});
+    const open = opts.open !== false;
+
+    const tryHere = async () => {
+      let list = composerTriggers(sel);
+      if (!list.length) return null;
+      if (!open) return { ready: true, opened: false, why: list[0].why };
+
+      for (const t of list) {
+        step(`открываю композер: ${t.why}`);
+        try {
+          if (window.DST.aim) await window.DST.aim.click(t.el);
+          else t.el.click?.();
+        } catch { continue; }
+
+        // Ждём именно открытия диалога, а не появления любого поля:
+        // поле «Что нового?» на странице есть всегда, и ожидание
+        // завершалось мгновенно ещё до того, как окно успевало открыться.
+        await waitFor(() => qsa(document, '[role="dialog"]').filter(isVisibleEl)[0] || null, 5000);
+        const f = await waitFor(() => {
+          const e = composerField(sel);
+          return e && isVisibleEl(e) ? e : null;
+        }, 4000);
+        if (f) return { ready: true, opened: true, why: t.why, el: f };
+
+        await closeStrayPopovers();
+        await sleep(350);
+      }
+      // Кликнуть не вышло, но встроенное поле могло быть готово и так.
+      const f = composerField(sel);
+      if (f && isVisibleEl(f)) return { ready: true, opened: false, why: "поле уже открыто", el: f };
+      return null;
+    };
+
+    let r = await tryHere();
+    if (r) return r;
+
+    // Композера здесь нет — уходим на ленту переходом внутри SPA.
+    const home = homeLink();
+    if (home) {
+      step("на этой странице композера нет — перехожу на ленту");
+      try {
+        if (window.DST.aim) await window.DST.aim.click(home);
+        else home.click?.();
+      } catch {}
+      await waitFor(() => (composerTriggers(sel).length ? true : null), 9000);
+      await sleep(600);
+      r = await tryHere();
+      if (r) return { ...r, wentHome: true };
+    }
+
+    const dl = qsa(document, '[role="dialog"]').filter(isVisibleEl).length;
+    const ed = qsa(document, sel.editable).filter(isVisibleEl).length;
+    return { ready: false, opened: false, where: location.pathname,
+             error: `не нашёл, чем открыть композер на ${location.pathname} ` +
+                    `(диалогов ${dl}, полей ввода ${ed}` +
+                    (home ? ", переход на ленту не помог" : ", ссылки «Главная» тоже нет") +
+                    "). Откройте ленту threads.com и повторите." };
+  }
+
+  async function createPost(text, sel, mode, file, opts = {}) {
+    const step = opts.onStep || (() => {});
+
+    const c = await ensureComposer(sel, { open: true, onStep: step });
+    if (!c.ready) return { ok: false, error: c.error };
+
+    let editable = c.el && isVisibleEl(c.el) ? c.el : (await waitFor(() => {
       const e = composerField(sel);
       return e && isVisibleEl(e) ? e : null;
-    }, 6000) || composerField(sel);
+    }, 6000) || composerField(sel));
 
     if (!editable) {
       const dl = qsa(document, '[role="dialog"]').filter(isVisibleEl).length;
       const ed = qsa(document, sel.editable).filter(isVisibleEl).length;
       return { ok: false,
-               error: `не появился композер (диалогов на странице ${dl}, полей ввода ${ed}). ` +
-                      "Откройте threads.com и попробуйте ещё раз." };
+               error: `композер открылся (${c.why}), но поля ввода в нём нет ` +
+                      `(диалогов ${dl}, полей ${ed}). Обновите вкладку Threads и повторите.` };
     }
+    step("поле поста найдено");
 
     // Lexical принимает ввод только в сфокусированное поле. Один клик по
     // самому полю снимает большую часть отказов «ввод не принят».
@@ -1442,10 +1717,11 @@
     } catch (e) { /* фокус не критичен, пробуем вставлять как есть */ }
 
     const grabComposer = async () => composerField(sel);
-    const insP = await setEditableText(editable, text, { reacquire: grabComposer });
+    const insP = await setEditableText(editable, text, { reacquire: grabComposer, onStep: step });
     if (insP.alreadySent) return { ok: false, risky: true, error: "пост ушёл при вводе — повтор запрещён" };
     if (!insP.ok) { await closeComposer(); return { ok: false, error: insP.error || "текст поста не вставился" }; }
     editable = insP.el || editable;
+    step(`текст поста введён (${insP.how})`);
 
     const dialog = editable.closest('[role="dialog"]') || document.body;
     let attached = false;
@@ -1453,7 +1729,8 @@
     await sleep(rnd(600, 1100));
     if (mode !== "auto") return { ok: true, drafted: true, attached };
 
-    const sent = await submitComposer(editable, dialog, sel, { text });
+    step("нажимаю «Опубликовать»");
+    const sent = await submitComposer(editable, dialog, sel, { text, onStep: step });
     if (sent.ok) return { ok: true, sent: true, attached, confirmed: sent.how };
     await closeComposer();
     return { ok: false, drafted: true, attached, risky: !!sent.risky,
@@ -1954,6 +2231,8 @@
     readMetrics, extractPostText, textPublished, composerGone, submitComposer, fieldText,
     editableAlive, waitEditableStable, typeInto,
     composerScope, composerField, nearEditable, replyPromptTargets, bareEditableTargets,
+    composerTriggers, ensureComposer, homeLink,
+    isSearchField, isWritableField, looksWrongTarget,
     countReplies,
   };
 })();

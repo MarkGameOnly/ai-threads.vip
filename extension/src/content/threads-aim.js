@@ -287,6 +287,10 @@
     const dom = window.DST.dom, find = window.DST.find, res = window.DST.resolve;
     const out = { page: find.where(), url: location.href, steps: [] };
     const step = (name, ok, note) => out.steps.push({ name, ok, note: note || "" });
+    // Третье состояние, кроме «прошло/не прошло»: «так и задумано».
+    // Без него калибровка пугала красным крестом там, где всё в порядке
+    // (см. кнопку отправки ниже), и итог всегда был «часть шагов не прошла».
+    const skip = (name, note) => out.steps.push({ name, ok: true, skip: true, note: note || "" });
 
     const link = find.visible ? (window.DST.ours.qsa(document, sel.postLink)[0] || null)
                               : document.querySelector(sel.postLink);
@@ -332,12 +336,21 @@
     if (field) {
       const btn = res ? await res.sendTarget(field.scope, sel, { allowModel: false, wait: 1200 })
                       : find.submitButton(field.scope, sel);
-      step("Кнопка отправки найдена", !!btn,
-           btn ? (btn.getAttribute("aria-label") || btn.textContent || "").trim().slice(0, 28)
-               : "поле пустое — кнопка появится после ввода текста");
+      // Threads показывает «Опубликовать» только когда в поле есть текст.
+      // Калибровка намеренно ничего не вводит, поэтому отсутствие кнопки
+      // здесь — не поломка, а устройство интерфейса. Раньше это был ✕, и
+      // человек видел «часть шагов не прошла» на полностью исправной
+      // связке.
+      if (btn) {
+        step("Кнопка отправки найдена",
+             true, (btn.getAttribute("aria-label") || btn.textContent || "").trim().slice(0, 28));
+      } else {
+        skip("Кнопка отправки", "появится после ввода текста — это нормально");
+      }
       await dom.closeComposer();
     }
     out.ok = out.steps.every((s) => s.ok);
+    out.failed = out.steps.filter((s) => !s.ok).map((s) => s.name);
     return out;
   }
 

@@ -295,6 +295,12 @@
       if (!el || isOurs(el)) return;
       if (!document.body.contains(el)) return;
       if (out.some((o) => o.el === el)) return;
+      // Позиционные догадки не смотрят на подпись и один раз уже выбрали
+      // чип «Поиск публикаций от …» — Threads ушёл на /search, а
+      // комментарий лёг в строку поиска. У кнопки ответа таких слов не
+      // бывает, поэтому отсев дешёвый и безопасный.
+      if (why !== "label" && why !== "row-label" &&
+          window.DST?.dom?.looksWrongTarget?.(el)) return;
       out.push({ el, why });
     };
 

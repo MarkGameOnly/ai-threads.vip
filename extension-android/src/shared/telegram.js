@@ -9,11 +9,26 @@ async function call(method, params = {}, tokenOverride) {
   const token = tokenOverride ?? s.telegramToken;
   if (!token) throw new Error("Не задан токен Telegram-бота");
 
-  const res = await fetch(`${API}/bot${token}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
+  // Таймаут обязателен: уведомление о лиде отправляется прямо из цикла
+  // охотника, и повисший fetch к api.telegram.org останавливал бы всю
+  // программу ради сообщения, которое вообще не критично.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), method === "getUpdates" ? 40000 : 15000);
+  let res;
+  try {
+    res = await fetch(`${API}/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    throw new Error(e?.name === "AbortError"
+      ? `Telegram ${method}: не ответил вовремя`
+      : `Telegram ${method}: ${e?.message || e}`);
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json();
   if (!data.ok) {
     throw new Error(`Telegram ${method}: ${data.description || res.status}`);
