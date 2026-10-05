@@ -72,6 +72,18 @@ prose, the Threads tab being closed, and the background worker not answering.
 In every case the program must finish and, when leads exist, actually post
 comments. No network access and no real Threads session are involved.
 
+```bash
+node tests/post-smoke.mjs
+```
+
+Covers publishing, replying and profile analysis against a miniature DOM:
+the composer being found on its own (including walking back to the feed from
+`/messages`, where there is no composer at all), the collector honouring its
+time budget instead of blowing the RPC timeout, `threads-rpc.js` no longer
+answering `unknown rpc` to messages that belong to another listener, the
+autoposter replying immediately instead of after the whole loop, and replying
+to a thread even when the post card cannot be identified by its code.
+
 ## Support
 
 Questions or issues: message **[@aithreads50_bot](https://t.me/aithreads50_bot)** with `/support`, or see **https://ai-threads.vip/install** for a walkthrough with screenshots.

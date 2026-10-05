@@ -100,51 +100,58 @@
         console.error("[AI Threads]", err);
       });
     });
-    window.addEventListener("dst-log", (e) => addLog(e.detail));
-
-    // Шторка и боковая панель не повторяют логику кнопок, а вызывают ту
-    // же act(). Дублировать её было бы худшим из решений: расхождение
-    // между «Запустить» на телефоне и на компьютере обнаружилось бы уже
-    // у пользователя, а не здесь.
-    // Тот же обработчик доступен изнутри страницы, без chrome.tabs.
-    // Панель в шторке живёт в iframe в ЭТОЙ же вкладке, и слать команды
-    // через chrome.tabs.sendMessage было ошибкой: адресат выбирался
-    // поиском по всем вкладкам и на телефоне с несколькими открытыми
-    // Threads попадал в старую усыплённую вкладку. Отсюда «Страница
-    // Threads не отвечает» при живой странице прямо под шторкой.
-    window.addEventListener("dst-panel-act", (e) => {
-      const { action, reply } = e.detail || {};
-      if (!action) return;
-      runAct(action).then(reply || (() => {}));
-    });
-
-    async function runAct(action) {
-      const real = panel?.querySelector(`[data-a="${action}"]`);
-      const btn = real || Object.assign(document.createElement("button"), { dataset: {} });
-      try {
-        await act(action, btn);
-        return { ok: true, label: btn.textContent, busy: btn.dataset.busy === "1" };
-      } catch (err) {
-        addLog({ msg: "✕ " + (err?.message || err), kind: "err" });
-        return { ok: false, error: err?.message || String(err) };
-      }
-    }
-
-    chrome.runtime.onMessage.addListener((msg, _s, reply) => {
-      if (msg?.type !== "RPC_PANEL_ACT") return;
-      const real = panel?.querySelector(`[data-a="${msg.action}"]`);
-      // Если кнопки в разметке нет (панель скрыта), подсовываем пустышку:
-      // act() пишет в неё состояние busy и подпись, но наружу это не идёт.
-      const btn = real || Object.assign(document.createElement("button"), { dataset: {} });
-      Promise.resolve(act(msg.action, btn))
-        .then(() => reply({ ok: true, label: btn.textContent, busy: btn.dataset.busy === "1" }))
-        .catch((err) => {
-          addLog({ msg: "✕ " + (err?.message || err), kind: "err" });
-          reply({ ok: false, error: err?.message || String(err) });
-        });
-      return true;
-    });
   }
+
+  /* ── Команды извне ────────────────────────────────────────────
+     ЭТИ СЛУШАТЕЛИ ДОЛЖНЫ ЖИТЬ ВНЕ build().
+
+     Раньше они регистрировались внутри build(), а build() вызывается
+     только из init(), который в свою очередь не вызывается при
+     panelEnabled === false. То есть стоило человеку спрятать плавающее
+     окно — и вкладка «Работа» в боковой панели немела целиком: на
+     RPC_PANEL_ACT в странице не отвечал никто, кроме threads-rpc.js, а
+     тот отвечал «unknown rpc». Кнопки боковой панели не имеют никакого
+     отношения к видимости плавающего окна, поэтому и слушатели от неё
+     зависеть не должны.
+
+     Шторка и боковая панель не повторяют логику кнопок, а вызывают ту
+     же act(). Дублировать её было бы худшим из решений: расхождение
+     между «Запустить» на телефоне и на компьютере обнаружилось бы уже
+     у пользователя, а не здесь. */
+  window.addEventListener("dst-log", (e) => addLog(e.detail));
+
+  // Панель в шторке живёт в iframe в ЭТОЙ же вкладке, и слать команды
+  // через chrome.tabs.sendMessage было ошибкой: адресат выбирался
+  // поиском по всем вкладкам и на телефоне с несколькими открытыми
+  // Threads попадал в старую усыплённую вкладку. Отсюда «Страница
+  // Threads не отвечает» при живой странице прямо под шторкой.
+  window.addEventListener("dst-panel-act", (e) => {
+    const { action, reply } = e.detail || {};
+    if (!action) return;
+    runAct(action).then(reply || (() => {}));
+  });
+
+  async function runAct(action) {
+    const real = panel?.querySelector(`[data-a="${action}"]`);
+    // Если кнопки в разметке нет (панель скрыта или выключена),
+    // подсовываем пустышку: act() пишет в неё состояние busy и подпись,
+    // но наружу это не идёт.
+    const btn = real || Object.assign(document.createElement("button"), { dataset: {} });
+    try {
+      const res = await act(action, btn);
+      if (res && res.ok === false) return res;
+      return { ok: true, label: btn.textContent, busy: btn.dataset.busy === "1" };
+    } catch (err) {
+      addLog({ msg: "✕ " + (err?.message || err), kind: "err" });
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+    if (msg?.type !== "RPC_PANEL_ACT") return;   // чужое — отвечает другой слушатель
+    runAct(msg.action).then(reply);
+    return true;
+  });
 
   const R = () => window.DST?.rpc;
   const E = () => window.DST?.engine;
@@ -206,10 +213,15 @@
     requireModules(["dom", "aim", "find", "engine", "rpc", "ours"]);
     const r = R();
     switch (a) {
-      case "min":
+      case "min": {
+        // Плавающего окна может не быть (panelEnabled === false) —
+        // сворачивать тогда нечего, но падать из-за этого незачем.
+        const body = panel?.querySelector(".dst-body");
+        if (!body) return { ok: false, error: "плавающая панель выключена в настройках" };
         minimized = !minimized;
-        panel.querySelector(".dst-body").style.display = minimized ? "none" : "block";
+        body.style.display = minimized ? "none" : "block";
         btn.textContent = minimized ? "+" : "–"; break;
+      }
       case "chat": {
         // Результат раньше игнорировался, и при неудаче кнопка выглядела
         // мёртвой: нажал — ничего. Молчащая кнопка хуже ошибки, потому
@@ -265,7 +277,15 @@
       }
       case "mode-auto":
       case "mode-manual": {
-        const mode = btn.dataset.m;
+        // Режим берём ИЗ ИМЕНИ ДЕЙСТВИЯ, а не из кнопки. Кнопки может не
+        // быть вовсе: когда команда приходит из боковой панели, сюда
+        // передаётся пустышка с пустым dataset, и btn.dataset.m был
+        // undefined — в настройки улетало commentMode: undefined, то
+        // есть «ни авто, ни вручную». Имя действия есть всегда.
+        const mode = btn?.dataset?.m || String(a).replace(/^mode-/, "");
+        if (mode !== "auto" && mode !== "manual") {
+          return { ok: false, error: `неизвестный режим: ${a}` };
+        }
         await sendSW({ type: "SET_SETTINGS", patch: { commentMode: mode } });
         await sendSW({ type: "ENGINE_SET", patch: { mode } });
         await refresh();
@@ -291,15 +311,22 @@
       case "post": {
         if (!r?.startPosting) throw new Error("Модуль постинга не загрузился — обнови страницу");
         const run = r.isRunning();
-        if (run.post) { r.stopPosting(); btn.textContent = "Автопост"; btn.classList.remove("on"); }
-        else {
-          btn.textContent = "⏹ Стоп"; btn.classList.add("on");
-          const res = await r.startPosting();
-          if (res && res.ok === false) {
-            addLog({ msg: "✕ " + (res.error || "не удалось запустить"), kind: "err" });
-          }
+        if (run.post) {
+          r.stopPosting();
           btn.textContent = "Автопост"; btn.classList.remove("on");
+          break;
         }
+        // startPosting() теперь отвечает сразу: проверки — синхронно,
+        // сам цикл — в фоне. Подпись кнопки меняем по результату, а не
+        // заранее: иначе при «очередь тем пуста» она показывала «⏹ Стоп»
+        // при остановленном постинге.
+        const res = await r.startPosting();
+        if (res && res.ok === false) {
+          addLog({ msg: "✕ " + (res.error || "не удалось запустить"), kind: "err" });
+          btn.textContent = "Автопост"; btn.classList.remove("on");
+          return res;
+        }
+        btn.textContent = "⏹ Стоп"; btn.classList.add("on");
         break;
       }
       case "diag": {

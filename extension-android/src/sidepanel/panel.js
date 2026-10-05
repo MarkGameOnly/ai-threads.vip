@@ -648,7 +648,11 @@ async function publishPost(draftOnly) {
   closePostModal();
   const c = busyCard(I18N.t("post_busy", "Публикую пост") + (postFile ? " …" : ""));
   const mode = draftOnly || postMode === "manual" ? "review" : "auto";
-  const r = await T.createPostWithMedia(text, postFile, mode);
+  // Ход публикации виден в логе: «нет поля поста — открываю ленту»,
+  // «открываю композер», «нажимаю Опубликовать». Раньше между нажатием
+  // и ошибкой не было ничего, и понять, на чём встало, было нельзя.
+  const r = await T.createPostWithMedia(text, postFile, mode,
+                                        (m) => pushLog({ msg: m }));
   c.done();
   if (!r.ok) return errMsg(r.error || "не удалось");
   botMsg(r.sent
@@ -916,8 +920,11 @@ async function commentOnPost(code) {
       const ok = await confirmText(I18N.t("act_comment_confirm", "Отправить этот комментарий?"), text);
       if (!ok) { botMsg(I18N.t("act_cancelled", "Отменено.")); return; }
     }
+    // Лог обязателен: без него «открыл ветку и вышел» выглядело как
+    // молчание — ни шага, ни причины.
     const r = await T.commentOnLead({ ...p, permalink: p.permalink, code: p.code },
-                                    text, manual ? "draft" : "auto");
+                                    text, manual ? "draft" : "auto",
+                                    (m) => pushLog({ msg: m }));
     if (r.ok && r.sent) botMsg(I18N.t("act_comment_sent", "Комментарий отправлен:") + "\n\n" + text);
     else if (r.ok) botMsg(I18N.t("act_comment_draft", "Комментарий вставлен — подтвердите отправку в Threads."));
     else errMsg(r.error || "не получилось");

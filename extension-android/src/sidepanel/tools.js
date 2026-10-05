@@ -151,12 +151,45 @@ function safeJson(t) {
   return null;
 }
 
+/**
+ * Сколько времени дать странице на сбор постов.
+ *
+ * ПОЧЕМУ ЭТО ОТДЕЛЬНАЯ ФУНКЦИЯ. У rpc() был единый таймаут 60 с на всё.
+ * Сбор 40–50 постов в него не укладывается почти никогда: прокрутка
+ * идёт с человеческими паузами, а когда постов у автора меньше, чем
+ * просили, страница ещё и досиживает холостые попытки «подгрузить ещё».
+ * Разбор профиля из-за этого стабильно заканчивался голым
+ * «ОШИБКА timeout» — причём уже собранные посты выбрасывались.
+ *
+ * Теперь бюджет считается от размера задачи и уезжает в сам content
+ * script (budgetMs): страница сама останавливается чуть раньше и
+ * отдаёт, что успела. Таймаут RPC — всегда больше бюджета, иначе мы бы
+ * оборвали ответ ровно в тот момент, когда он формируется.
+ */
+function collectBudget(target) {
+  const n = Math.max(1, Number(target) || 50);
+  return Math.min(300000, 40000 + n * 3000);
+}
+
+async function collect(tabId, target, onLog) {
+  const budgetMs = collectBudget(target);
+  const r = await rpcSafe(tabId, "RPC_COLLECT", { target, budgetMs }, budgetMs + 20000);
+  if (!r.ok && /timeout/i.test(r.error || "")) {
+    return { ok: false, error: `страница не ответила за ${Math.round((budgetMs + 20000) / 1000)} с — ` +
+                               "вкладка Threads занята или уснула, обновите её (F5) и повторите" };
+  }
+  if (r.ok && r.partial) {
+    onLog?.(`Время вышло: собрано ${r.posts.length} из ${target} — работаю с тем, что есть.`);
+  }
+  return r;
+}
+
 // ---- Парсинг ленты ----
 export async function parseFeed(target, onLog) {
   const s = await getSettings();
   const tab = await ensureThreadsTab("https://www.threads.com/");
   onLog?.("Собираю ленту…");
-  const r = await rpcSafe(tab.id, "RPC_COLLECT", { target: target || s.parseTarget });
+  const r = await collect(tab.id, target || s.parseTarget, onLog);
   if (!r.ok) return { ok: false, error: r.error };
   await savePosts(r.posts);
   return { ok: true, posts: r.posts };
@@ -165,14 +198,18 @@ export async function parseFeed(target, onLog) {
 // ---- Парсинг профиля ----
 export async function parseProfile(handle, target, onLog) {
   handle = String(handle || "").replace(/^@/, "").trim();
-  const s = await getSettings();
+  const want = target || 40;
   const tab = await ensureThreadsTab();
   onLog?.(`Открываю профиль @${handle}…`);
   await navigate(tab.id, `https://www.threads.com/@${enc(handle)}`);
   onLog?.("Собираю посты профиля…");
-  const r = await rpcSafe(tab.id, "RPC_COLLECT", { target: target || 40 });
+  const r = await collect(tab.id, want, onLog);
   if (!r.ok) return { ok: false, error: r.error };
   const posts = r.posts.map((p) => ({ ...p, author: p.author || handle }));
+  if (!posts.length) {
+    return { ok: false, error: `на странице @${handle} не видно ни одного поста. ` +
+                               "Профиль закрыт, пуст, или Threads просит войти — проверьте вкладку." };
+  }
   await savePosts(posts);
   return { ok: true, posts, handle };
 }
@@ -189,7 +226,7 @@ export async function parseSearch(query, target, onLog, filter) {
   const url = `https://www.threads.com/search?q=${enc(query)}&serp_type=default` +
               (f ? `&filter=${enc(f)}` : "");
   await navigate(tab.id, url);
-  const r = await rpcSafe(tab.id, "RPC_COLLECT", { target: target || 50 });
+  const r = await collect(tab.id, target || 50, onLog);
   if (!r.ok) return { ok: false, error: r.error, posts: [] };
   await savePosts(r.posts);
   return { ok: true, posts: r.posts };
@@ -798,8 +835,11 @@ async function runHunterInner(cfg, hooks) {
         if (!(await ensureContentScript(id))) {
           return { ok: false, error: "content-script не поднялся на странице поста" };
         }
+        // Не шлюз, а предупреждение: у главного поста на его же странице
+        // ссылки на себя часто нет, и опознать карточку по коду нельзя —
+        // при этом поле ответа на экране есть и комментарий проходит.
         const ready = await rpcSafe(id, "RPC_WAIT_POST", { code: lead.code, timeout: 12000 }, 20000);
-        if (!ready.ok) return { ok: false, error: ready.error || "ветка не открылась" };
+        if (!ready.ok) log(`· @${lead.author}: карточка не опознана — работаю по странице целиком`);
         await sleep(900);
         // 60с не хватало: посимвольный ввод + до трёх подтверждений отправки
         // легко перешагивают минуту, а «timeout» трактовался как провал —
@@ -940,7 +980,7 @@ export async function runCommenting(hooks) {
   const log = hooks?.log || (() => {});
   const tab = await ensureThreadsTab("https://www.threads.com/");
   log("Собираю ленту…");
-  const r = await rpcSafe(tab.id, "RPC_COLLECT", { target: s.parseTarget });
+  const r = await collect(tab.id, s.parseTarget, log);
   if (!r.ok) return { ok: false, error: r.error };
   await savePosts(r.posts);
   const targets = r.posts.filter((p) => passesFilters(p, s));
@@ -1000,11 +1040,41 @@ export async function runCommenting(hooks) {
   return { ok: true, commented: done };
 }
 
-// ---- Пост с вложением (скрепка) ----
-export async function createPostWithMedia(text, file, mode) {
-  const s = await getSettings();
+/**
+ * Подготовить вкладку к публикации.
+ *
+ * ensureThreadsTab(url) использует url ТОЛЬКО когда создаёт новую
+ * вкладку. Если вкладка Threads уже открыта, она возвращается как есть —
+ * вместе с тем, что на ней сейчас: /messages после Директа, страница
+ * чужого поста после комментария, выдача поиска. Композера там нет, и
+ * постинг падал с «не появился композер (диалогов 0, полей ввода 0)».
+ *
+ * Сначала спрашиваем саму страницу (RPC_COMPOSER_READY): она умеет
+ * перейти на ленту внутри SPA, без перезагрузки. Только если и это не
+ * помогло — навигируем вкладку жёстко.
+ */
+async function ensureComposerTab(onLog) {
   const tab = await ensureThreadsTab("https://www.threads.com/");
-  return rpc(tab.id, "RPC_POST", { text, file, mode: mode || s.commentMode }, 90000);
+  await ensureContentScript(tab.id);
+
+  const probe = await rpcSafe(tab.id, "RPC_COMPOSER_READY", {}, 25000);
+  if (probe.ok && probe.ready) return tab;
+
+  onLog?.("На открытой вкладке Threads нет поля поста — открываю ленту…");
+  await navigate(tab.id, "https://www.threads.com/");
+  const again = await rpcSafe(tab.id, "RPC_COMPOSER_READY", {}, 25000);
+  if (again.ok && again.ready) return tab;
+  return tab;   // пусть createPost попробует сам и вернёт внятный диагноз
+}
+
+// ---- Пост с вложением (скрепка) ----
+export async function createPostWithMedia(text, file, mode, onLog) {
+  const s = await getSettings();
+  const tab = await ensureComposerTab(onLog);
+  onLog?.("Публикую…");
+  // Таймаут был 90 с, а внутри createPost теперь ещё и переход на ленту
+  // (до ~10 с) плюс медленная вставка длинного текста: впритык.
+  return rpc(tab.id, "RPC_POST", { text, file, mode: mode || s.commentMode }, 150000);
 }
 
 // ---- ДИРЕКТ: ответы в личке (с одобрением) ----
@@ -1410,8 +1480,14 @@ export async function commentOnLead(lead, text, mode = "auto", log = () => {}) {
   if (!(await ensureContentScript(tab.id))) {
     return { ok: false, error: "content-script не поднялся на странице поста" };
   }
+  // RPC_WAIT_POST ищет карточку поста по ссылке a[href*="/post/CODE"].
+  // На странице самой ветки у главного поста ссылки на себя часто нет
+  // вовсе, и проверка честно отвечала «ветка не отрисовалась». Раньше
+  // это был жёсткий шлюз: агент открывал ветку, упирался в него и молча
+  // выходил, ни разу не попробовав написать. Теперь это предупреждение —
+  // commentOnPost() умеет работать и по странице целиком.
   const ready = await rpcSafe(tab.id, "RPC_WAIT_POST", { code: lead.code, timeout: 12000 }, 20000);
-  if (!ready.ok) return { ok: false, error: ready.error || "ветка не открылась" };
+  if (!ready.ok) log(`карточка поста не опознана (${ready.error || "?"}) — пробую по странице целиком`);
   await sleep(900);
   log("ветка открыта, вставляю комментарий");
   // Состояние меняется — слепой повтор запрещён, поэтому rpc, а не rpcSafe:
