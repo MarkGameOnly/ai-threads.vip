@@ -81,8 +81,22 @@ the composer being found on its own (including walking back to the feed from
 `/messages`, where there is no composer at all), the collector honouring its
 time budget instead of blowing the RPC timeout, `threads-rpc.js` no longer
 answering `unknown rpc` to messages that belong to another listener, the
-autoposter replying immediately instead of after the whole loop, and replying
-to a thread even when the post card cannot be identified by its code.
+autoposter replying immediately instead of after the whole loop, replying
+to a thread even when the post card cannot be identified by its code, and
+commenting from the feed never navigating away from it (5.6.2): when there
+is no reply control, the extension refuses honestly instead of clicking the
+post's own link and bouncing to the thread and back.
+
+## Releasing a build
+
+```bash
+node tools/release.mjs release 5.6.2
+```
+
+Checks that every file referenced by each manifest exists and that the three
+`src/` trees are byte-identical, bumps the version in all manifests, and
+rebuilds `builds/` (`.zip` + signed `.crx` for every variant). See
+[tools/README.md](./tools/README.md) for the key-management caveats.
 
 ## Support
 

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Threads — Настройки</title><link rel="stylesheet" href="options.css" /></head>
+<body>
+  <main class="wrap">
+    <header class="head"><div class="logo"></div><div><h1>AI Threads</h1><p class="sub">Подключение и настройки</p></div></header>
+
+    <section class="card login-card">
+      <div class="login-logo"></div>
+      <h2 class="login-title">AI THREADS <b>VIP</b></h2>
+      <p class="login-sub">Безопасный вход через Telegram</p>
+
+      <label>Telegram ID</label>
+      <input id="tgUserId" placeholder="Введите ваш Telegram ID" inputmode="numeric" />
+      <p class="fieldhint">Узнать ID можно у <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a></p>
+
+      <label>Ключ активации</label>
+      <input id="pin" placeholder="TAI-XXXX-XXXX-XXXX" />
+      <p class="fieldhint">Ключ выдаётся в боте <a href="https://t.me/aithreads50_bot" target="_blank">@aithreads50_bot</a> → «Кабинет»</p>
+
+      <button id="connectBackend" class="login-btn">Войти</button>
+      <button id="syncPrompts" class="ghost" style="width:100%;margin-top:8px">Синхронизировать промпты</button>
+      <span id="beStatus" class="status"></span>
+
+      <details class="tip"><summary>ⓘ Как получить ID и ключ (3 шага)</summary>
+        <p>1. Открой бота <a href="https://t.me/aithreads50_bot" target="_blank">@aithreads50_bot</a> и нажми <b>Старт</b>.</p>
+        <p>2. В сообщении «Кабинет» скопируй <b>Telegram ID</b> и <b>ключ активации</b> (вид: <code>TAI-XXXX-XXXX-XXXX</code>).</p>
+        <p>3. Вставь оба поля сюда и нажми «Войти». Готово — можно работать.</p>
+        <label class="check"><input id="commercialMode" type="checkbox" checked /> Работать через сервер (квота генераций)</label>
+        <label>Адрес сервера (менять не нужно)</label><input id="backendUrl" value="https://ai-threads.vip" />
+      </details>
+    </section>
+
+    <section class="card"><h2 data-i18n="lang_label">🌐 Язык / Language</h2>
+      <select id="uiLang">
+        <option value="ru">🇷🇺 Русский</option>
+        <option value="en">🇬🇧 English</option>
+      </select>
+      <p class="fieldhint" data-i18n="lang_note">Выбор общий с Telegram-ботом.</p>
+      <span id="langStatus" class="status"></span>
+    </section>
+
+    <section class="card"><h2>🧠 Модель</h2>
+      <label>Какой моделью генерировать</label>
+      <select id="aiModel"></select>
+      <p class="fieldhint" id="modelHint">Список подтягивается с сервера после подключения кабинета.</p>
+      <button id="reloadModels" class="ghost" style="margin-top:6px">Обновить список моделей</button>
+      <p class="hint">DeepSeek доступен сразу. Claude, GPT и Gemini появятся в списке автоматически,
+        как только владелец добавит ключ провайдера в админке — обновлять расширение не нужно.
+        PRO-модели работают только с активной подпиской.</p>
+    </section>
+
+    <section class="card"><h2>🎯 Ниша — готовые промпты</h2>
+      <label>Выбери нишу</label>
+      <select id="nicheSelect"></select>
+      <button id="applyNiche" class="ghost" style="margin-top:8px">Применить промпты этой ниши</button>
+      <span id="nicheStatus" class="status"></span>
+      <p class="hint">Заполнит разом: комментарии, посты, отбор лидов, директ и поисковые
+        запросы «Охотника» — под язык и боли вашей аудитории. После применения любой промпт
+        можно поправить руками ниже. Более точный вариант — пройти воронку в боте
+        (<code>/setup</code>): там промпты собираются под ваш конкретный продукт.</p>
+    </section>
+
+    <section class="card"><h2>🛡 Безопасный режим (снижение риска банов)</h2>
+      <label class="check"><input id="safe_enabled" type="checkbox" /> Включить Safe Mode (рекомендуется)</label>
+      <div class="grid2"><div><label>Мин. пауза, сек</label><input id="safe_minGapSec" type="number" /></div>
+      <div><label>Макс. пауза, сек</label><input id="safe_maxGapSec" type="number" /></div></div>
+      <div class="grid2"><div><label>Джиттер, %</label><input id="safe_jitterPct" type="number" /></div>
+      <div><label>Кулдаун каждые N действий</label><input id="safe_cooldownEvery" type="number" /></div></div>
+      <div class="grid2"><div><label>Длинная пауза, мин</label><input id="safe_cooldownMin" type="number" /></div>
+      <div><label>Прогрев, дней</label><input id="safe_warmupDays" type="number" /></div></div>
+      <div class="grid2"><div><label>Активность с часа</label><input id="safe_activeFrom" type="number" /></div>
+      <div><label>до часа</label><input id="safe_activeTo" type="number" /></div></div>
+      <p class="hint">Safe Mode делает поведение человекоподобным: случайные паузы, длинные кулдауны, «прогрев» лимитов в первые дни и работа только в активные часы. Это <b>снижает</b> риск ограничений, но не даёт 100% гарантии — автоматизация против правил Threads всегда несёт риск.</p>
+    </section>
+
+    
+
+    
+
+    <section class="card"><h2>👤 Бренд / персона</h2>
+      <div class="grid2"><div><label>Имя бренда</label><input id="brandName" /></div><div><label>Хэндл (без @)</label><input id="brandHandle" /></div></div>
+      <label>Профиль</label><input id="brandProfile" />
+      <label>Описание бренда (для комментариев и охотника)</label><textarea id="brand" rows="3"></textarea>
+      <label>Ниша</label><textarea id="niche" rows="2"></textarea>
+      <details class="tip"><summary>ⓘ Пример заполнения (бренд/персона)</summary>
+        <p><b>Имя бренда:</b> Кофейня «Тёплый двор»<br>
+        <b>Хэндл:</b> teplyi_dvor<br>
+        <b>Описание:</b> Локальная кофейня и обжарка. Пишем от лица бариста — по-доброму, с юмором, помогаем выбрать зерно и рассказываем про акции.<br>
+        <b>Ниша:</b> кофе, обжарка, локальный бизнес, гастрономия, Алматы</p>
+        <p class="muted">Подставляется в промпты как <code>{brandName}</code>, <code>{brand}</code>, <code>{niche}</code>.</p>
+      </details>
+    </section>
+
+    <section class="card"><h2>💬 Промпт комментариев</h2>
+      <label>Пресет</label>
+      <select id="presetSelect"></select>
+      <label>Текст инструкции (можно править)</label>
+      <textarea id="commentPrompt" rows="6"></textarea>
+      <details class="tip"><summary>ⓘ Пример хорошего промпта комментария</summary>
+        <p>«Пиши как живой человек из этой ленты: сначала поймай конкретную мысль поста, потом ответь коротко в том же тоне. Без хэштегов и рекламы. 1 предложение, 100–150 символов.»</p>
+        <p class="muted">Коротко = естественнее и безопаснее. Длинные однотипные комментарии повышают риск ограничений.</p>
+      </details>
+      <div class="grid2"><div><label>Макс. символов в комменте</label><input id="commentMaxChars" type="number" /></div>
+      <div><label>Режим</label><select id="commentMode">
+        <option value="review">Черновик — вставить, отправляю сам</option>
+        <option value="auto">Авто — отправлять</option>
+        <option value="manual">Только текст (не вставлять)</option></select></div></div>
+    </section>
+
+    <section class="card"><h2>🧠 Остальные промпты</h2>
+      <label>Пост <code>{brandName} {niche} {topic}</code></label><textarea id="postPrompt" rows="4"></textarea>
+      <label>Квалификация лида — вернёт JSON <code>{brand} {author} {post}</code></label><textarea id="leadPrompt" rows="4"></textarea>
+      <details class="tip"><summary>ⓘ Примеры (пост и квалификация лида)</summary>
+        <p><b>Пост:</b> «Короткий пост на тему {topic} от лица {brandName}. Первая строка — крючок, дальше 1–2 мысли, без хэштегов.»</p>
+        <p><b>Лид:</b> оставь как есть — вернёт JSON со score и причиной, почему человек подходит. Это уходит тебе в бота.</p>
+      </details>
+      <label>Комментарий охотника (продажа мягко) <code>{brandName} {brand} {author} {post} {angle}</code></label><textarea id="hunterCommentPrompt" rows="4"></textarea>
+    </section>
+
+    <section class="card"><h2>🔎 Парсинг и фильтры</h2>
+      <div class="grid2"><div><label>Сколько постов собирать (target)</label><input id="parseTarget" type="number" /></div>
+      <div><label>Макс. прокруток</label><input id="parseMaxScrolls" type="number" /></div></div>
+      <label>Ключевые слова лида (через запятую)</label><textarea id="leadKeywords" rows="2"></textarea>
+      <label>Стоп-слова</label><textarea id="stopKeywords" rows="2"></textarea>
+      <div class="grid2"><div><label>Мин. лайков</label><input id="minLikes" type="number" /></div><div><label>Мин. комментов</label><input id="minReplies" type="number" /></div></div>
+    </section>
+
+    <section class="card"><h2>🛡 Лимиты (антибан)</h2>
+      <div class="grid2"><div><label>Пауза комменты, сек (от)</label><input id="commentDelayMinSec" type="number" /></div><div><label>(до)</label><input id="commentDelayMaxSec" type="number" /></div></div>
+      <div class="grid2"><div><label>Макс. комментов/день</label><input id="maxCommentsPerDay" type="number" /></div><div><label>Макс. постов/день</label><input id="maxPostsPerDay" type="number" /></div></div>
+      <div class="grid2"><div><label>Пауза посты, сек (от)</label><input id="postDelayMinSec" type="number" /></div><div><label>(до)</label><input id="postDelayMaxSec" type="number" /></div></div>
+    </section>
+
+    <section class="card"><h2>❤️ Комментинг: лайк и пауза</h2>
+      <label class="check"><input id="likeOnComment" type="checkbox" /> Ставить лайк вместе с комментарием</label>
+      <div class="grid2"><div><label>Сон между комментами, сек</label><input id="commentSleepSec" type="number" /></div>
+      <div><label>Случайный разброс ±, сек</label><input id="commentSleepJitter" type="number" /></div></div>
+      <p class="hint">По умолчанию 160 ± 40 сек — как живой человек. Комментинг сам открывает пост, лайкает и пишет коротко.</p>
+    </section>
+
+    <section class="card"><h2>✉️ Директ (ответы в личке) — эксперимент</h2>
+      <label class="check"><input id="dm_enabled" type="checkbox" /> Включить режим Директа</label>
+      <label class="check"><input id="dm_approve" type="checkbox" /> Одобрять каждый ответ вручную</label>
+      <div class="grid2"><div><label>Пауза, сек (от)</label><input id="dm_delayMinSec" type="number" /></div>
+      <div><label>(до)</label><input id="dm_delayMaxSec" type="number" /></div></div>
+      <label>Максимум ответов за проход</label><input id="dm_maxPerRun" type="number" />
+      <div class="grid2">
+        <div><label>Отвечать от лица</label>
+          <select id="dm_persona">
+            <option value="auto">не указывать (нейтрально)</option>
+            <option value="female">девушки</option>
+            <option value="male">парня</option>
+          </select></div>
+        <div><label>Имя (необязательно)</label><input id="dm_personaName" /></div>
+      </div>
+      <label>Промпт диалога (тон общения)</label><textarea id="dm_prompt" rows="5"></textarea>
+    </section>
+
+    <section class="card"><h2>🕒 Расписание постов</h2>
+      <label class="check"><input id="sch_enabled" type="checkbox" /> Включить планировщик</label>
+      <div class="grid2">
+        <div><label class="check"><input id="sch_morning_on" type="checkbox" /> Утро</label><input id="sch_morning_time" type="time" /></div>
+        <div><label class="check"><input id="sch_day_on" type="checkbox" /> День</label><input id="sch_day_time" type="time" /></div>
+      </div>
+      <div class="grid2">
+        <div><label class="check"><input id="sch_evening_on" type="checkbox" /> Вечер</label><input id="sch_evening_time" type="time" /></div>
+        <div><label class="check"><input id="sch_night_on" type="checkbox" /> Ночь</label><input id="sch_night_time" type="time" /></div>
+      </div>
+      <p class="hint">Планировщик публикует пост в ближайший выбранный слот. Chrome должен быть открыт с вкладкой Threads; для авто-отправки поставь режим комментинга «Авто».</p>
+    </section>
+
+    <section class="card"><h2>✈️ Telegram (уведомления о лидах)</h2>
+      <label>Токен бота</label><div class="row"><input id="telegramToken" type="password" /><button class="ghost" data-reveal="telegramToken">👁</button></div>
+      <label>Admin ID</label><input id="telegramAdminId" />
+      <label class="check"><input id="telegramNotifyLeads" type="checkbox" /> Слать лидов в Telegram</label>
+      <label class="check"><input id="liveControlEnabled" type="checkbox" /> Живой контроль лидовых комментариев (спрашивать в Telegram перед отправкой)</label>
+      <div class="row"><button id="testTg" class="primary">Проверить</button><button id="sendTg" class="ghost">Тест-сообщение</button></div><span id="tgStatus" class="status"></span>
+          <details class="tip"><summary>ⓘ Зачем и как настроить Telegram</summary>
+        <p>Сюда прилетают найденные «Охотником» лиды: кто подходит и почему. Нужен твой личный бот (не обязательно) — создай у @BotFather, вставь токен и свой Telegram ID. Если пусто — лиды всё равно видны в панели «Клиенты».</p>
+        <p class="muted"><b>Токен:</b> 123456:AA...  ·  <b>Твой ID:</b> узнать у @userinfobot</p>
+      </details>
+    </section>
+
+    <section class="card"><h2>📝 Темы автопостинга</h2>
+      <label>По одной теме на строку</label><textarea id="postTopics" rows="6"></textarea>
+    </section>
+
+    <details class="card"><summary>⚙️ Селекторы Threads</summary>
+      <label>Ссылка поста</label><input id="sel_postLink" />
+      <label>Ссылка автора</label><input id="sel_authorLink" />
+      <label>Поле ввода</label><input id="sel_editable" />
+      <label>Метки «Ответить»</label><input id="sel_replyButtonLabels" />
+      <label>Метки отправки</label><input id="sel_sendButtonLabels" />
+      <label>Метки триггера нового поста</label><input id="sel_composerTriggerLabels" />
+      <p class="hint">Если метрики или кнопки «поехали»: на панели Threads → 🩺 → консоль (F12) → впиши реальные значения.</p>
+    </details>
+
+    <div class="actions"><button id="save" class="primary big">Сохранить всё</button><span id="saveStatus" class="status"></span></div>
+    <footer class="foot">Локально (chrome.storage). Ключи уходят только на api.ai.com и api.telegram.org. Автоматизация Threads — против правил платформы, используй паузы и лимиты.</footer>
+  </main>
+  <script type="module" src="options.js"></script>
+</body></html>

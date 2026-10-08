@@ -27,6 +27,11 @@
  *  5. «Разбери мой профиль …» → ОШИБКА timeout. Сбор постов не
  *     укладывался в общий таймаут 60 с, и уже собранное выбрасывалось.
  *
+ *  6. «Разворот туда-обратно» при комментировании из ленты (5.6.2).
+ *     Без кнопки ответа расширение кликало ссылку на пост, уходило на
+ *     него и возвращалось обратно. Теперь адрес вкладки не трогается:
+ *     поле открылось на месте — работаем, нет — честный отказ.
+ *
  * Настоящего браузера здесь нет: DOM — минимальная заглушка ниже,
  * ровно под те селекторы, которыми пользуется продукт.
  */
@@ -325,6 +330,80 @@ async function searchTrapCase() {
 }
 
 /* ══════════════════════════════════════════════════════════════
+   1в. КОММЕНТИРОВАНИЕ ИЗ ЛЕНТЫ БЕЗ «РАЗВОРОТА ТУДА-ОБРАТНО»
+
+   Живой случай 5.6.2. В ленте у поста не опознали кнопку ответа,
+   и последней запасной целью оставалась ссылка на сам пост:
+   расширение кликало её, уходило на страницу поста, там не
+   находило поле, жало history.back() — и возвращалось в ленту.
+   Два захода подряд, и каждый раз лента «разворачивалась
+   туда-обратно» на глазах у человека.
+
+   Теперь цели, уводящие со страницы, в открытии ответа не
+   участвуют вовсе: комментарий из ленты либо открывает поле на
+   месте, либо честно отказывает — адрес вкладки не трогается.
+   ══════════════════════════════════════════════════════════════ */
+
+async function feedRoundTripCase() {
+  const page = makePage("/");
+  const mem = {};
+  const ctx = makeSandbox(page, {
+    chrome: {
+      runtime: { lastError: undefined, onMessage: { addListener() {} } },
+      storage: { local: {
+        get: (keys, cb) => {
+          const ks = Array.isArray(keys) ? keys
+                  : typeof keys === "string" ? [keys] : Object.keys(keys || {});
+          const out = {};
+          for (const k of ks) if (k in mem) out[k] = mem[k];
+          if (typeof cb === "function") { cb(out); return; }
+          return Promise.resolve(out);
+        },
+        set: (o, cb) => { Object.assign(mem, o); if (typeof cb === "function") cb(); return Promise.resolve(); },
+        remove: () => Promise.resolve(),
+      } },
+    },
+  });
+  ctx.window.document.createTreeWalker = () => ({ nextNode: () => null });
+  ctx.window.NodeFilter = { SHOW_TEXT: 4 };
+  vm.runInContext(read("content/threads-dom.js"), ctx);
+  const D = ctx.window.DST.dom;
+
+  // Карточка поста в ленте: автор, текст, ссылка на пост — и ни одной
+  // кнопки ответа. Единственная цель, которую способен найти запасной
+  // путь, — сама ссылка на пост (увела бы на /@someone/post/XYZ).
+  const cont = new El("div", {}, []);
+  const author = new El("a", { href: "/@someone" }, [], "@someone");
+  const text = new El("div", {}, [],
+    "Текст поста достаточной длины, чтобы карточка определилась однозначно.");
+  const link = new El("a", { href: "/@someone/post/XYZ" }, [], "XYZ");
+  // Эмуляция SPA-перехода: клик по ссылке меняет адрес.
+  link.onclick = () => { ctx.location.pathname = "/@someone/post/XYZ"; };
+  cont.appendChild(new El("div", {}, [author]));
+  cont.appendChild(text);
+  cont.appendChild(link);
+  page.body.appendChild(cont);
+
+  const sel = {
+    postLink: 'a[href*="/post/"]', authorLink: 'a[href^="/@"]',
+    editable: 'div[contenteditable="true"], textarea', replyButtonLabels: [],
+  };
+  const t0 = Date.now();
+  const r = await D.commentOnPost("XYZ", "проверочный комментарий", sel, "manual");
+  const spent = Date.now() - t0;
+
+  check("из ленты: ссылка на пост не кликается ради открытия ответа",
+    link.clicks === 0, `кликов: ${link.clicks}`);
+  check("из ленты: адрес не меняется (нет разворота туда-обратно)",
+    ctx.location.pathname === "/", `адрес: ${ctx.location.pathname}`);
+  check("из ленты: честный отказ вместо ухода на пост и обратно",
+    r.ok === false && /пропущена \(увела бы со страницы\)/.test(r.error || ""),
+    (r.error || "").slice(0, 80));
+  check("из ленты: отказ быстрый, без выжидания на чужой странице",
+    spent < 5000, `${(spent / 1000).toFixed(1)} с`);
+}
+
+/* ══════════════════════════════════════════════════════════════
    2. СБОР ПОСТОВ УКЛАДЫВАЕТСЯ В БЮДЖЕТ
    ══════════════════════════════════════════════════════════════ */
 
@@ -561,6 +640,7 @@ await composerCase("без ленты и навигации — честный �
   { pathname: "/messages", feed: false, nav: false, expectReady: false });
 
 await searchTrapCase();
+await feedRoundTripCase();
 await collectBudgetCase();
 await rpcRoutingCase();
 await toolsCases();
