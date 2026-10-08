@@ -1335,7 +1335,9 @@ function wire() {
   ["order", "lang"].forEach((k) => $("h_" + k)?.addEventListener("change", (e) => (hunterCfg[k] = e.target.value)));
   $("modelPick")?.addEventListener("change", async (e) => {
     settings.aiModel = e.target.value;
-    await chrome.runtime.sendMessage({ type: "SET_SETTINGS", patch: { aiModel: e.target.value } });
+    // sw() вместо голого await sendMessage: спящий фон не должен
+    // оставлять в консоли необработанный «Could not establish connection».
+    await sw({ type: "SET_SETTINGS", patch: { aiModel: e.target.value } });
     botMsg(e.target.value ? `Переключилась на модель: ${activeModelLabel()}` : "Вернулась на модель по умолчанию.");
   });
 
@@ -1345,7 +1347,7 @@ function wire() {
     hunterCfg.product = $("h_product").value.trim();
     hunterCfg.mode = (settings.commentMode === "manual") ? "manual" : "auto";
     if (!hunterCfg.product) { $("h_product").focus(); return; }
-    await chrome.runtime.sendMessage({ type: "SET_SETTINGS", patch: { hunter: hunterCfg } });
+    await sw({ type: "SET_SETTINGS", patch: { hunter: hunterCfg } });
     closeHunter(); switchTab("chat");
     // .catch обязателен: без него любая ошибка внутри программы была
     // unhandled rejection — ни сообщения, ни завершения карточки.

@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Release signing keys — never commit
+/tools/keys/
+
+# The Python-template rules dist/ and lib/ above must not eat the
+# release tooling's own directories.
+!/tools/dist/
+!/tools/lib/

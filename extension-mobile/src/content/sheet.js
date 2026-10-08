@@ -163,6 +163,7 @@
     build();
     host.style.display = "flex";
     if (pill) pill.style.display = "none";
+    if (innerHeight > baseH) baseH = innerHeight;   // шторку могли открыть впервые спустя часы
     applySnap(which || snap);
     return { ok: true, mode: "sheet" };
   }
@@ -212,9 +213,42 @@
     try { chrome.runtime.sendMessage({ type: "LOG_LINE", line: e.detail }); } catch {}
   });
 
-  // Высота считается от innerHeight, а адресная строка на телефоне
-  // прячется при прокрутке и меняет её. Без пересчёта шторка «отклеивается».
-  window.addEventListener("resize", () => { if (host && host.style.display !== "none") applySnap(snap); });
+  /* ── Пересчёт высоты при ресайзе ─────────────────────────────
+     Высота считается от innerHeight, а на телефоне его меняют ДВЕ
+     разные вещи: адресная строка (прячется при прокрутке) и экранная
+     клавиатура. Раньше шторка реагировала на обе одинаково — сразу
+     пересчитывала привязку под новый размер.
+
+     Клавиатура поднимается и падает по несколько раз за один
+     комментарий из ленты (фокус в поле — ответ — фокус уходит), и
+     шторка на каждое движение складывалась и разворачивалась обратно.
+     Снаружи это и было «разворот туда-обратно».
+
+     Теперь запоминаем наибольшую высоту окна — это чистый экран без
+     клавиатуры. Пока окно заметно ниже, клавиатура поднята: привязку
+     НЕ пересчитываем, только не даём шторке вылезти за доступное
+     место. Окно вернулось к полной высоте — клавиатура убрана,
+     возвращаем сохранённую привязку одним движением. */
+  // Стартуем с текущей высоты, не дожидаясь первого ресайза: иначе
+  // клавиатура, поднятая до первого ресайза, сама стала бы «эталоном».
+  let baseH = innerHeight, resizeTimer = 0;
+  window.addEventListener("resize", () => {
+    if (innerHeight > baseH) baseH = innerHeight;
+    if (!host || host.style.display === "none") return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (!host || host.style.display === "none") return;
+      if (baseH && innerHeight < baseH * 0.82) {
+        // Клавиатура поднята: держим текущую высоту, обрезая её только
+        // до реально доступного места. Ни анимации, ни записи в storage.
+        const cap = Math.max(120, innerHeight - 24);
+        const h = host.getBoundingClientRect().height;
+        if (h > cap) host.style.height = cap + "px";
+        return;
+      }
+      applySnap(snap);
+    }, 120);
+  });
 
   window.DST = window.DST || {};
   window.DST.sheet = { open, collapse, cycle };
