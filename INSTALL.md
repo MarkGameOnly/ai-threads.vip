@@ -43,6 +43,14 @@ Safari and Chrome on iOS don't support browser extensions — that's an iOS plat
 - **Auto-send isn't working on comments/posts/DMs:** check **Options → Selectors → Send labels**, and add whatever label the button currently shows (e.g. "Post", "Reply", "Send").
 - **Still stuck:** message **[@aithreads50_bot](https://t.me/aithreads50_bot)** with `/support`, or see the visual walkthrough at **https://ai-threads.vip/install**.
 
-## A note on automation risk
+## How the automation works
 
-Auto-commenting, auto-posting, and DM replies work by emulating clicks in the Threads interface, which is against Threads' automation rules and can lead to rate limits or a ban. The extension defaults to **draft/review mode** (text is prepared, you press send) with built-in pauses and daily limits — keep them on unless you understand the risk.
+Auto-commenting, auto-posting and DM replies are performed in your own browser,
+from your own account: the extension opens the post, types the text and presses
+the send button — the same clicks you would make yourself, only at a human pace.
+Threads provides no API for this.
+
+Out of the box everything is on: commenting starts by itself once Threads is
+open, queued posts go out at their slot time, and new DMs get an answer.
+Intensity lives in ⚙️ **Options → Safe Mode** (pauses, daily limits, active
+hours), and **⏹ Stop** in the panel pauses the running engine at once.

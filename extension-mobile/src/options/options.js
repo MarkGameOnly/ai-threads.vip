@@ -10,7 +10,7 @@ const TEXT = ["backendUrl","tgUserId","pin",
   "telegramToken","telegramAdminId"];
 const NUM = ["commentMaxChars","parseTarget","parseMaxScrolls","minLikes","minReplies",
   "commentDelayMinSec","commentDelayMaxSec","maxCommentsPerDay","maxPostsPerDay","postDelayMinSec","postDelayMaxSec"];
-const BOOL = ["telegramNotifyLeads", "likeOnComment", "commercialMode", "liveControlEnabled"];
+const BOOL = ["telegramNotifyLeads", "likeOnComment", "commercialMode", "liveControlEnabled", "autostart"];
 const NUM2 = ["commentSleepSec", "commentSleepJitter"];
 const CSV = ["leadKeywords","stopKeywords"];
 const SEL = ["postLink","authorLink","editable","replyButtonLabels","sendButtonLabels","composerTriggerLabels"];

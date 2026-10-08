@@ -299,7 +299,8 @@
       }
       case "comment": {
         const e = await engineState();
-        if (e.running) { await E().stop(); }
+        // byUser: «⏹ Остановить» — решение человека, автозапуск это помнит.
+        if (e.running) { await E().stop({ byUser: true }); }
         else {
           const s = await r.getSettings();
           const res = await E().start(s.commentMode || "auto");

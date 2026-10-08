@@ -14,9 +14,9 @@ Growth toolkit for [Threads](https://www.threads.com/): AI-generated replies, po
 - **🔎 Real-metric parsing:** likes, comments, reposts, and shares pulled from the live page (not zeros). Post count is configurable (50 by default, can be increased).
 - **📄 Viral posts table:** sortable, with a "Viral only" filter and a "✍ Rewrite in my style" button that rewrites a trending post to match your voice.
 - **🎯 Leads table:** scored leads with the reason they're a fit and a suggested opener; one click generates a comment.
-- **💬 Auto-commenting:** automatic / manual / text-only modes, with built-in prompt presets. Comments are kept short (about one sentence, ~150 characters).
-- **📝 Scheduled posting:** a queue of topics, with morning/day/evening/night time slots.
-- **✉️ DM replies (experimental):** drafts natural, human-sounding DM replies for your approval before sending.
+- **💬 Auto-commenting (runs on its own):** starts as soon as Threads is open and your key is connected — automatic / manual / text-only modes, built-in prompt presets, short comments (one sentence, ~150 characters).
+- **📝 Scheduled posting:** a queue of topics, with morning/day/evening/night time slots — queued posts are published automatically at their slot time.
+- **✉️ DM automation:** answers new DMs in a natural, human voice — auto-send by default, approval mode one switch away.
 - **📎 Media posts:** attach a photo/video with a short caption.
 - **✦ One-click comment generation** button on every post in the feed.
 - Dark UI throughout, with optional Telegram notifications for new leads.
@@ -39,11 +39,26 @@ See **[INSTALL.md](./INSTALL.md)** for step-by-step setup on each platform.
 2. Open the extension's options (⚙️ icon), enter your Telegram ID and the key from the bot's "Cabinet" section, and click **Connect**.
 3. When your free generations run out, upgrade via **[@aithreadsvip_bot](https://t.me/aithreadsvip_bot)** for unlimited use.
 
-## Honest notes on automation
+## How the automation works
 
-Threads occasionally changes its markup. Metrics and buttons are read via `aria-label` and on-screen text; if something reads as zero or a button doesn't respond, open the panel's 🩺 diagnostic, check the console (F12) for the current `aria-label`s, and update the selectors in **Options → Selectors**.
+Threads has no public API for this kind of automation, so the extension does the
+work in your own browser, from your own logged-in account: it opens the post,
+types the text and presses the real buttons — exactly the clicks you would make
+by hand, with human-like pacing. Actions never leave your machine; the backend is
+only asked for text.
 
-Auto-commenting and auto-posting emulate clicks on the Threads UI, which goes against the platform's automation rules and carries a risk of rate limits or a ban. By default the extension runs in **draft/review mode** — text is filled in but you send it — and includes pauses and daily limits. Use them.
+It is switched on out of the box:
+
+- commenting starts by itself once Threads is open and your key is connected;
+- posts you put in the queue (in the panel, or from the bot) are published at
+  their slot time;
+- new DMs get an answer instead of waiting for you.
+
+**Safe Mode** (on by default) keeps the pace human: pauses with jitter, a daily
+cap that warms up over your first week, and active hours. All of it is
+configurable in ⚙️ **Options → Safe Mode**, and the **⏹ Stop** button in the
+panel pauses the engine instantly — it stays paused until you press
+**▶ Start** again.
 
 ## Project structure
 

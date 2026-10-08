@@ -278,7 +278,9 @@
             sendResponse(await window.DST.engine.start(msg.mode || s.commentMode));
             break;
           case "STOP_COMMENTING":
-            sendResponse(await window.DST.engine.stop());
+            // byUser: это осознанное «стоп» из панели — после него
+            // автозапуск не поднимает движок заново.
+            sendResponse(await window.DST.engine.stop({ byUser: true }));
             break;
           case "RPC_SEND_PENDING":
             sendResponse(await window.DST.engine.sendPending(msg.code, msg.text));
