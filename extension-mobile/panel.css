@@ -1,0 +1,47 @@
+/* Плавающая панель на странице Threads — стиль ai-threads.vip (чёрно-белый). */
+.dst-panel{position:fixed;top:88px;right:16px;z-index:2147483000;width:252px;
+  background:#000;border:1px solid #262626;border-radius:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.85);color:#fff;
+  font-family:"Space Mono",ui-monospace,"Courier New",monospace;font-size:12px;overflow:hidden}
+.dst-head{display:flex;align-items:center;gap:8px;padding:10px 12px;
+  background:#070707;border-bottom:1px solid #262626}
+.dst-head b{font-weight:700;font-size:11px;letter-spacing:.08em}
+.dst-sp{flex:1}
+.dst-dot{width:7px;height:7px;border-radius:50%;background:#fff;flex:0 0 auto}
+.dst-dot.run{animation:dstPulse 1.4s ease-in-out infinite}
+@keyframes dstPulse{0%,100%{opacity:1}50%{opacity:.25}}
+.dst-head button{background:transparent;color:#808080;border:1px solid #3a3a3a;width:22px;height:22px;
+  border-radius:50%;cursor:pointer;font-size:13px;line-height:1;padding:0}
+.dst-head button:hover{color:#fff;border-color:#fff}
+.dst-body{padding:11px}
+.dst-row{display:flex;gap:6px;margin-bottom:6px}
+.dst-row.dst-small button{flex:1;font-size:8.5px;padding:8px 4px}
+.dst-row.dst-small button[data-a="opts"]{flex:0 0 40px}
+.dst-body button{flex:1;cursor:pointer;border:1px solid #3a3a3a;background:transparent;
+  color:#c6c6c6;border-radius:999px;padding:9px 6px;font-family:inherit;font-size:9.5px;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase;transition:.18s}
+.dst-body button:hover{border-color:#fff;color:#fff}
+.dst-primary{background:#fff!important;border-color:#fff!important;color:#000!important}
+.dst-primary:hover{opacity:.85}
+.dst-body button.on{background:#fff!important;color:#000!important;border-color:#fff!important}
+
+/* переключатель режима авто / вручную */
+.dst-modes{display:flex;gap:6px;margin-bottom:8px}
+.dst-modes button{flex:1;font-size:9px;padding:7px 4px}
+.dst-stat{display:flex;gap:10px;font-size:9.5px;color:#808080;margin-bottom:8px;letter-spacing:.06em}
+.dst-stat b{color:#fff;font-weight:400}
+
+.dst-log{margin-top:8px;height:132px;overflow-y:auto;background:#070707;
+  border:1px solid #262626;border-radius:8px;padding:8px;font-size:10px;
+  line-height:1.5;font-family:inherit}
+.dst-line{color:#808080;white-space:pre-wrap;word-break:break-word;margin-bottom:3px}
+.dst-line.ok{color:#fff}
+.dst-line.err{color:#ff6b6b}
+.dst-log::-webkit-scrollbar{width:6px}
+.dst-log::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:3px}
+
+/* кнопка «✦» на карточке поста */
+.dst-gen{position:absolute;top:8px;right:8px;z-index:5;width:26px;height:26px;
+  border-radius:50%;border:1px solid #fff;cursor:pointer;font-size:12px;
+  background:#000;color:#fff;opacity:.7;transition:.18s}
+.dst-gen:hover{opacity:1;background:#fff;color:#000;transform:scale(1.08)}

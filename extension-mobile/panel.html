@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="logo"></div>
+      <span class="name">AI THREADS</span>
+      <span class="free">VIP</span>
+      <span class="sp"></span>
+      <button id="langBtn" class="mini lang" title="Язык / Language">RU</button>
+      <button id="opts" class="mini" title="Настройки" data-i18n-title="settings">⚙️</button>
+    </header>
+
+
+    <!-- ══ ПЕРВЫЙ ЗАПУСК ══
+         Шаг 1 двуязычный намеренно: язык ещё не выбран, и человек должен
+         прочитать инструкцию на своём. Шаг 2 — выбор языка, после него
+         панель сразу говорит на выбранном. -->
+    <div id="onb" class="onb hidden">
+      <div class="onb-card">
+        <div class="onb-brand"><span class="onb-logo"></span> AI THREADS <b>VIP</b></div>
+
+        <section id="onb1" class="onb-step">
+          <div class="onb-num">1 / 2</div>
+          <h2>Вход · Sign in</h2>
+          <label>Telegram ID</label>
+          <input id="onb_id" inputmode="numeric" autocomplete="off" placeholder="123456789" />
+          <label>Ключ активации · Activation key</label>
+          <input id="onb_key" autocomplete="off" placeholder="TAI-XXXX-XXXX-XXXX" />
+          <button id="onb_go" class="onb-run">Продолжить · Continue</button>
+          <div id="onb_err" class="onb-err"></div>
+          <p class="onb-hint">
+            Где взять: откройте бота
+            <a href="https://t.me/aithreads50_bot" target="_blank" rel="noopener">@aithreads50_bot</a>
+            → «🔑&nbsp;Кабинет» → там ваш <b>Telegram&nbsp;ID</b> и <b>ключ</b>.<br/>
+            <span class="onb-en">Where to get them: open
+            <a href="https://t.me/aithreads50_bot" target="_blank" rel="noopener">@aithreads50_bot</a>
+            → “🔑&nbsp;Account” — your <b>Telegram&nbsp;ID</b> and <b>key</b> are there.</span>
+          </p>
+        </section>
+
+        <section id="onb2" class="onb-step hidden">
+          <div class="onb-num">2 / 3</div>
+          <h2>Язык · Language</h2>
+          <p class="onb-sub">Панель, подсказки, встроенный помощник и все тексты, которые он
+            пишет за вас, переключатся сразу.<br/>
+            <span class="onb-en">The panel, hints, the built-in assistant and everything it
+            writes on your behalf switch right away.</span></p>
+          <div class="onb-langs">
+            <button data-l="ru" class="onb-lang">🇷🇺 Русский</button>
+            <button data-l="en" class="onb-lang">🇬🇧 English</button>
+          </div>
+        </section>
+
+        <!-- Шаг 3 уже на выбранном языке: тексты подставляет i18n -->
+        <section id="onb3" class="onb-step hidden">
+          <div class="onb-num">3 / 3</div>
+          <h2 data-i18n="onb3_h">Готово. Вот что дальше</h2>
+          <p class="onb-sub" data-i18n="onb3_sub">Три минуты на настройку — и всё остальное
+            работает само.</p>
+
+          <ol class="onb-steps">
+            <li><b data-i18n="onb3_s1t">Настройте под нишу</b>
+              <span data-i18n="onb3_s1">В боте нажмите «🎯 Настроить под нишу» — четыре
+                вопроса, и промпты соберутся под ваш продукт. Потом здесь: ⚙️ →
+                «Синхронизировать промпты».</span></li>
+            <li><b data-i18n="onb3_s2t">Бот для лидов (по желанию)</b>
+              <span data-i18n="onb3_s2">Хотите получать найденных клиентов себе в Telegram —
+                создайте своего бота у @BotFather (команда /newbot), скопируйте токен вида
+                <code>123456:AA…</code> и вставьте в ⚙️ → «Telegram». Свой ID узнайте
+                у @userinfobot. Без этого лиды всё равно видны во вкладке «Клиенты».</span></li>
+            <li><b data-i18n="onb3_s3t">Что умеет расширение</b>
+              <span data-i18n="onb3_s3">«Охотник» ищет клиентов по вашему описанию,
+                «Директ» отвечает в личке, «Посты» показывают, что залетело у других,
+                и переписывают под вас, планировщик публикует по расписанию.</span></li>
+            <li><b data-i18n="onb3_s4t">Авто или вручную</b>
+              <span data-i18n="onb3_s4">Во вкладке «Очередь» переключатель на две
+                позиции: «Авто» — ИИ пишет и отправляет сам, «Вручную» — показывает
+                текст и ждёт вашего подтверждения.</span></li>
+          </ol>
+
+          <button id="onb_done" class="onb-run" data-i18n="onb3_go">Начать работу</button>
+          <p class="onb-hint" data-i18n="onb3_hint">Эту памятку всегда можно открыть заново:
+            спросите помощника «как настроить» прямо в чате.</p>
+        </section>
+      </div>
+    </div>
+
+    <nav class="tabs">
+      <button data-tab="chat" class="active" data-i18n="tab_chat">💬 Чат</button>
+      <button data-tab="leads" data-i18n="tab_leads">🎯 Клиенты</button>
+      <button data-tab="queue"><span data-i18n="tab_queue">✓ Очередь</span> <span id="qBadge"></span></button>
+      <button data-tab="posts" data-i18n="tab_posts">📄 Посты</button>
+      <button data-tab="work">⚙️ Работа</button>
+      <button data-tab="health">🩺 Здоровье</button>
+      <button data-tab="log">📜 Логи</button>
+    </nav>
+
+    <div class="stats" id="engineStats">
+      <span><span data-i18n="st_mode">режим</span> <b id="stMode">—</b></span>
+      <span><span data-i18n="st_seen">найдено</span> <b id="stSeen">0</b></span>
+      <span><span data-i18n="st_sent">отправлено</span> <b id="stSent">0</b></span>
+    </div>
+
+    <!-- ЧАТ -->
+    <section id="view-chat" class="view">
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <div class="composer-tools">
+          <select id="modelPick" class="chip" title="Модель генерации" data-i18n-title="model_title"></select>
+          <button id="huntBtn" class="chip act" data-i18n="btn_hunter">🕵️ Охотник</button>
+          <button id="postBtn" class="chip act" data-i18n="btn_post">📎 Пост</button>
+          <button id="dmBtn" class="chip act" data-i18n="btn_dm">✉️ Директ</button>
+        </div>
+        <div class="composer-row">
+          <textarea id="input" rows="1" placeholder="Спросите AI Threads VIP…" data-i18n-ph="input_ph"></textarea>
+          <button id="send" class="send">➤</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- КЛИЕНТЫ -->
+    <section id="view-leads" class="view hidden">
+      <div id="leads" class="list"></div>
+    </section>
+
+    <!-- ОЧЕРЕДЬ ПОДТВЕРЖДЕНИЯ -->
+    <section id="view-queue" class="view hidden">
+      <div class="toolbar">
+        <div class="modes" style="flex:1;margin:0">
+          <button data-mode="auto" data-i18n="mode_auto">Авто</button>
+          <button data-mode="manual" data-i18n="mode_manual">Вручную</button>
+        </div>
+      </div>
+      <p class="modehint" id="modeHint" data-i18n="mode_hint_auto">
+        Авто: ИИ пишет в вашем стиле и отправляет сам.</p>
+      <div id="queue" class="list"></div>
+    </section>
+
+    <!-- ПОСТЫ (viral table) -->
+    <section id="view-posts" class="view hidden">
+      <div class="toolbar">
+        <label class="switch"><input id="onlyViral" type="checkbox" /> <span data-i18n="only_viral">Только залетевшие</span></label>
+        <select id="sortBy">
+          <option value="engagement" data-i18n="sort_engagement">По вовлечённости</option>
+          <option value="likes" data-i18n="sort_likes">По лайкам</option>
+          <option value="comments" data-i18n="sort_comments">По комментам</option>
+          <option value="reposts" data-i18n="sort_reposts">По репостам</option>
+        </select>
+      </div>
+      <div class="poststats" id="postStats"></div>
+      <div id="posts" class="table"></div>
+    </section>
+
+    <!-- РАБОТА — управление движком прямо из панели.
+         На телефоне плавающего окна с этими кнопками нет: оно закрывало
+         бы ленту. Кнопки не дублируют логику, а вызывают те же
+         обработчики в content script (RPC_PANEL_ACT) — расхождение между
+         телефоном и компьютером здесь невозможно по построению. -->
+    <section id="view-work" class="view hidden">
+      <div class="workwrap">
+        <div class="modes">
+          <button data-wmode="auto">Авто</button>
+          <button data-wmode="manual">Вручную</button>
+        </div>
+        <p class="modehint" id="workModeHint">
+          Авто: сам находит посты, пишет и отправляет.</p>
+
+        <button class="wbtn primary" data-act="comment" id="wComment">▶ Запустить комментинг</button>
+        <button class="wbtn primary" data-act="post" id="wPost">📝 Автопост</button>
+
+        <div class="wgrid">
+          <button class="wbtn" data-act="parse" id="wParse">🔎 Парсинг ленты</button>
+          <button class="wbtn" data-act="leads" id="wLeads">🎯 Найти клиентов</button>
+        </div>
+
+        <button class="wbtn" data-act="diag">🩺 Калибровка</button>
+        <p class="whint">Калибровка проходит всю цепочку без отправки и показывает,
+          что именно не находится на вашей сборке Threads. С неё стоит начинать,
+          если кнопки «не срабатывают».</p>
+
+        <div class="wstat">
+          <span>найдено <b id="wSeen">0</b></span>
+          <span>готово <b id="wGen">0</b></span>
+          <span>отправлено <b id="wSent">0</b></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ЗДОРОВЬЕ — панель здоровья аккаунта + живой контроль + очередь
+         постинга из Telegram. Данные приходят с бэкенда (тот же токен,
+         что у /api/ext/generate) — если кабинет не подключён, секция
+         просто покажет подсказку подключить его. -->
+    <section id="view-health" class="view hidden">
+      <div class="toolbar">
+        <button id="healthRefresh" class="mini">🔄 Обновить</button>
+      </div>
+      <div id="healthStats" class="wstat" style="flex-wrap:wrap;gap:8px 16px"></div>
+      <div id="healthReasons" class="list"></div>
+
+      <p class="whint" style="margin-top:14px">🎯 Живой контроль — последние решения</p>
+      <div id="healthReviews" class="list"></div>
+
+      <p class="whint" style="margin-top:14px">📤 Очередь постинга из Telegram</p>
+      <div id="healthQueue" class="list"></div>
+
+      <p class="whint" style="margin-top:14px">
+        Полная история и постинг новых материалов — через бота: пришлите
+        фото или видео с подписью, бот предложит время публикации
+        (утро/день/вечер/ночь). Опубликуется, когда это расширение открыто
+        в браузере — без него публиковать некому (см. /health в боте).
+      </p>
+    </section>
+
+    <!-- ЛОГИ -->
+    <section id="view-log" class="view hidden">
+      <div class="toolbar">
+        <button id="logClear" class="mini">Очистить</button>
+        <button id="logCopy" class="mini">Скопировать</button>
+        <button id="diagReset" class="mini">Сбросить счёт</button>
+      </div>
+      <!-- Где именно ломается цепочка. Без этой таблицы «иногда не
+           срабатывает» остаётся догадкой: причин отказа больше десяти,
+           и лечатся они по-разному. -->
+      <div id="diagBox" class="diagbox"></div>
+      <div id="logBox" class="logbox"></div>
+    </section>
+
+    <!-- Новый пост с медиа -->
+    <div id="postModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head"><b data-i18n="post_new">📎 Новый пост</b><button id="postClose" class="mini">✕</button></div>
+        <label data-i18n="post_text_l">Текст поста (коротко!)</label>
+        <textarea id="p_text" rows="4" placeholder="Короткий живой пост…" data-i18n-ph="post_text_ph"></textarea>
+        <div class="attach-row">
+          <label class="attach-btn"><span data-i18n="post_attach">📎 Прикрепить фото/видео</span>
+            <input id="p_file" type="file" accept="image/*,video/*" hidden />
+          </label>
+          <span id="p_fileName" class="fname"></span>
+        </div>
+        <button id="p_ideas" class="ghostbtn wide" data-i18n="post_ideas">✨ Предложить варианты</button>
+        <div id="p_ideaList" class="ideas hidden"></div>
+
+        <label data-i18n="post_when">Когда опубликовать</label>
+        <select id="p_slot">
+          <option value="now" data-i18n="slot_now">Сейчас</option>
+          <option value="morning" data-i18n="slot_morning">Утром</option>
+          <option value="day" data-i18n="slot_day">Днём</option>
+          <option value="evening" data-i18n="slot_evening">Вечером</option>
+          <option value="night" data-i18n="slot_night">Ночью</option>
+          <option value="exact" data-i18n="slot_exact">Точное время…</option>
+        </select>
+        <div id="p_exactRow" class="exact hidden">
+          <input id="p_date" type="date" />
+          <input id="p_time" type="time" />
+        </div>
+
+        <label data-i18n="post_mode">Как публиковать</label>
+        <div class="modes pm">
+          <button data-pmode="auto" class="on" data-i18n="post_mode_auto">Авто</button>
+          <button data-pmode="manual" data-i18n="post_mode_manual">Вручную</button>
+        </div>
+        <p class="hint2" id="p_modeHint" data-i18n="post_mode_hint_auto">
+          Авто: расширение само откроет Threads и опубликует в назначенное время.</p>
+
+        <div class="post-actions">
+          <button id="p_publish" class="run" data-i18n="post_publish">Опубликовать / в очередь</button>
+          <button id="p_draft" class="ghostbtn" data-i18n="post_draft">Только черновик</button>
+        </div>
+
+        <div class="planned">
+          <div class="planned-h"><b data-i18n="plan_title">🗓 Запланировано</b>
+            <span id="p_planCount" class="pcount">0</span></div>
+          <div id="p_plan" class="planned-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Охотник за клиентами (модалка) -->
+    <div id="hunter" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <b data-i18n="hunt_title">🕵️ AI-охотник за клиентами</b>
+          <button id="huntClose" class="mini">✕</button>
+        </div>
+        <ol class="steps-list">
+          <li data-i18n="hunt_s1">Построить поисковые гипотезы</li>
+          <li data-i18n="hunt_s2">Собрать главную ленту и поисковую выдачу</li>
+          <li data-i18n="hunt_s3">Оставить свежие уникальные возможности</li>
+          <li data-i18n="hunt_s4">Строгая AI-квалификация лидов</li>
+          <li data-i18n="hunt_s5">Начать полезные диалоги в выбранных ветках</li>
+        </ol>
+        <label data-i18n="hunt_product_l">Продукт, услуга и идеальный клиент *</label>
+        <textarea id="h_product" rows="3" placeholder="Например: продаю AI-контент и автоматизацию для блогеров…" data-i18n-ph="hunt_product_ph"></textarea>
+        <details class="tip"><summary data-i18n="hunt_tip_sum">ⓘ Как заполнить (пример)</summary>
+          <p>Опиши <b>что продаёшь</b> и <b>кто идеальный клиент</b> — одним абзацем. Чем конкретнее, тем точнее лиды.</p>
+          <p><b>Пример:</b> «Делаю сайты-визитки и лендинги для мастеров бьюти (брови, ногти, ресницы). Идеальный клиент — мастер без сайта, который ищет клиентов в соцсетях и жалуется на запись в директе.»</p>
+          <p class="muted">Дальше охотник сам построит запросы, соберёт ветки, отфильтрует свежие, оценит лидов и предложит мягкие заходы в комментарии.</p>
+        </details>
+        <div class="grid2">
+          <div><label data-i18n="hunt_order_l">Порядок выдачи</label>
+            <select id="h_order"><option value="fresh" data-i18n="hunt_order_fresh">Сначала свежие</option><option value="relevant" data-i18n="hunt_order_rel">По релевантности</option></select></div>
+          <div><label data-i18n="hunt_lang_l">Язык поиска</label>
+            <select id="h_lang"><option value="auto" data-i18n="hunt_lang_auto">Авто — по описанию</option><option value="ru">Русский</option><option value="en">English</option></select></div>
+        </div>
+        <label class="check" style="display:flex;align-items:center;gap:8px;margin:10px 0">
+          <input id="h_useFeed" type="checkbox" checked />
+          <span data-i18n="hunt_usefeed">Искать и в главной ленте, не только в поиске</span>
+        </label>
+        <div class="stepper"><span data-i18n="hunt_feed">Веток из ленты</span><div><button data-s="feedTarget" data-d="-10">−</button><b id="h_feedTarget">50</b><button data-s="feedTarget" data-d="10">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_hyp">Поисковых гипотез</span><div><button data-s="hypotheses" data-d="-1">−</button><b id="h_hypotheses">5</b><button data-s="hypotheses" data-d="1">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_per_query">Веток на один запрос</span><div><button data-s="threadsPerQuery" data-d="-10">−</button><b id="h_threadsPerQuery">50</b><button data-s="threadsPerQuery" data-d="10">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_fresh_h">Свежесть, часов</span><div><button data-s="freshnessHours" data-d="-6">−</button><b id="h_freshnessHours">24</b><button data-s="freshnessHours" data-d="6">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_min_likes">Минимум лайков</span><div><button data-s="minLikes" data-d="-5">−</button><b id="h_minLikes">0</b><button data-s="minLikes" data-d="5">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_min_replies">Минимум комментариев</span><div><button data-s="minReplies" data-d="-5">−</button><b id="h_minReplies">0</b><button data-s="minReplies" data-d="5">+</button></div></div>
+        <div class="stepper"><span data-i18n="hunt_keep">Оставить лучших</span><div><button data-s="keepBest" data-d="-5">−</button><b id="h_keepBest">30</b><button data-s="keepBest" data-d="5">+</button></div></div>
+        <button id="huntRun" class="run" data-i18n="hunt_run">Запустить программу</button>
+        <!-- Брони «в работе» и паузы после неудач молча съедали лиды при
+             повторном запуске. Кнопка снимает их, не трогая список уже
+             прокомментированных постов — защита от дублей остаётся. -->
+        <button id="huntPurge" class="mini" style="width:100%;margin-top:8px"
+                title="Снять брони и паузы после неудач. Уже прокомментированные посты останутся защищены от повтора."
+                data-i18n="hunt_purge">↺ Сбросить брони лидов</button>
+      </div>
+    </div>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>
