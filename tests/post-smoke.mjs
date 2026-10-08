@@ -639,6 +639,71 @@ await composerCase("с /messages агент сам уходит на ленту"
 await composerCase("без ленты и навигации — честный отказ с адресом",
   { pathname: "/messages", feed: false, nav: false, expectReady: false });
 
+// Регрессии логов 08.10: счётчики ответов и вложенные ссылки.
+{
+  const page = makePage("/@target/post/XYZ");
+  const ctx = makeSandbox(page, { chrome: { runtime: { onMessage: { addListener() {} } } } });
+  ctx.URL = URL;
+  ctx.location.origin = "https://www.threads.com";
+  vm.runInContext(read("content/threads-dom.js"), ctx);
+  const D = ctx.DST.dom;
+  const more = new El("div", { role: "button", "aria-label": "Ещё" }, [], "Ещё");
+  check("дублированная подпись Ещё исключена из целей ответа", D.looksWrongTarget(more));
+  const scope = new El("div");
+  page.body.appendChild(scope);
+  for (const text of ["Ответ9", "Ответ15", "Ответ10", "Reply15"]) {
+    scope.appendChild(new El("div", { role: "button" }, [], text));
+  }
+  check("счётчики Ответ9/15/10 не считаются формой ввода",
+    D.replyPromptTargets({}, scope).length === 0);
+  const real = new El("div", {}, [], "Ответьте target…");
+  scope.appendChild(real);
+  check("настоящее приглашение Ответьте находится",
+    D.replyPromptTargets({}, scope).some(t => t.el === real));
+  const outside = new El("div", {}, [], "Ответьте other…");
+  page.body.appendChild(outside);
+  check("поиск приглашений ограничен нужной карточкой",
+    !D.replyPromptTargets({}, scope).some(t => t.el === outside));
+  for (const href of ["/@other/post/ABC", "/@target/post/XYZ?q=other", "https://example.com/@target/post/XYZ"]) {
+    const child = new El("div", {role: "button"}, [], "Ответьте other…");
+    const link = new El("a", {href}, [child]);
+    scope.appendChild(link);
+    check("приглашение внутри ссылки исключено: " + href,
+      !D.replyPromptTargets({}, scope).some(t => t.el === child || t.el === link));
+    link.remove();
+  }
+}
+
+// Подтверждение не путает перемонтированный редактор с отправкой.
+{
+  const page = makePage("/@target/post/XYZ");
+  let tick = 1000;
+  class ClockDate extends Date { static now() { return tick; } }
+  const ctx = makeSandbox(page, {
+    Date: ClockDate, setTimeout(fn, ms) { tick += ms; queueMicrotask(fn); return 0; },
+    chrome: { runtime: { onMessage: { addListener() {} } } },
+  });
+  vm.runInContext(read("content/threads-dom.js"), ctx);
+  const dialog = new El("div", {role: "dialog"});
+  const old = new El("div", {contenteditable: "true"}, [], "Проверочный текст комментария");
+  const fresh = new El("div", {contenteditable: "true"}, [], "Проверочный текст комментария");
+  page.body.appendChild(dialog); dialog.appendChild(fresh);
+  const remount = await ctx.DST.dom.verifySent(old, dialog, null,
+    "Проверочный текст комментария", null, 1200);
+  check("перемонтирование поля с текстом не считается RISKY_CONSUMED",
+    !remount.sent && !remount.emptied);
+  fresh.textContent = "";
+  const consumed = await ctx.DST.dom.verifySent(fresh, dialog, null,
+    "Проверочный текст комментария", null, 1200);
+  check("пустое поле без подтверждения сохраняет запрет повторной отправки",
+    !consumed.sent && consumed.emptied);
+  ctx.setTimeout = (fn, ms) => {tick += ms;ctx.location.pathname = "/search";queueMicrotask(fn);return 0;};
+  const navigated = await ctx.DST.dom.verifySent(fresh, dialog, null,
+    "Проверочный текст комментария", null, 1200);
+  check("навигация во время отправки не считается успешной публикацией",
+    !navigated.sent && navigated.how === "navigation-during-submit");
+}
+
 await searchTrapCase();
 await feedRoundTripCase();
 await collectBudgetCase();
