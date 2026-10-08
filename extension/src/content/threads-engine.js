@@ -411,6 +411,7 @@
         running: true, mode: mode || s.commentMode, src: s.source.feed ? "feed" : "search",
         qi: 0, queries, rotatedAt: Date.now(), startedAt: Date.now(),
         retry: "", retryCount: 0,
+        stoppedByUser: false, pausedUntil: 0,
         stats: { seen: 0, generated: 0, sent: 0, skipped: 0 },
       },
     });
@@ -420,23 +421,60 @@
     return { ok: true };
   }
 
-  async function stop() {
+  /**
+   * Остановка движка.
+   *
+   * opts.byUser   — нажали «⏹ Остановить». Это решение человека: после него
+   *                 автозапуск молчит до ручного «▶ Запустить».
+   * opts.pauseMin — остановка изнутри (дневной лимит, обрыв связи, «нет
+   *                 источников»). Автозапуск подождёт это время и попробует
+   *                 снова, чтобы перезагрузка страницы не запускала движок
+   *                 по кругу в ту же самую стену.
+   */
+  async function stop(opts = {}) {
     STOP = true;
-    await sw("ENGINE_SET", { patch: { running: false } });
+    const patch = { running: false, stoppedByUser: !!opts.byUser };
+    if (!opts.byUser) patch.pausedUntil = Date.now() + Math.max(1, num(opts.pauseMin, 15)) * 60000;
+    await sw("ENGINE_SET", { patch });
     stopHeartbeat();
     log("⏹ Остановлено");
     return { ok: true };
   }
 
-  /** Подъём после перезагрузки страницы. */
+  /** Минут до местной полуночи: там дневной лимит Safe Mode обнуляется. */
+  function minutesTillMidnight() {
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0);
+    return Math.max(1, Math.round((midnight - now) / 60000));
+  }
+
+  /**
+   * Подъём после перезагрузки страницы + работа «из коробки».
+   *
+   * Движок уже шёл — продолжаем с того же места. Не шёл — запускаем сами:
+   * подключённого кабинета и открытого Threads достаточно, чтобы комментинг
+   * работал без единого нажатия. Молчим, если человек нажал
+   * «⏹ Остановить», если автозапуск выключен в настройках, если движок сам
+   * поставил паузу (лимит/обрыв) и она ещё не вышла, или если кабинет ещё
+   * не подключён — тут панель и так показывает, что делать.
+   */
   async function resume() {
     const e = (window.DST?.rpc?.engineState ? await window.DST.rpc.engineState() : ((await sw("ENGINE_GET"))?.engine || { running: false, stats: {} }));
-    if (!e?.running) return;
-    if (!(await claimTab())) return;          // работает другая вкладка — молчим
-    STOP = false;
-    startHeartbeat();
-    log(`↻ Продолжаю (${e.src === "search" ? "поиск: " + (e.queries?.[e.qi] || "") : "лента"})`);
-    run();
+    if (e?.running) {
+      if (!(await claimTab())) return;          // работает другая вкладка — молчим
+      STOP = false;
+      startHeartbeat();
+      log(`↻ Продолжаю (${e.src === "search" ? "поиск: " + (e.queries?.[e.qi] || "") : "лента"})`);
+      run();
+      return;
+    }
+    const s = await getSettings();
+    if (!s.autostart || e?.stoppedByUser) return;
+    if (e?.pausedUntil && Date.now() < e.pausedUntil) return;
+    if (!(s.backendUrl && s.apiToken)) return;
+    log("▶️ Автозапуск: начинаю комментинг. Остановить — кнопкой «⏹ Остановить».", "ok");
+    await start(e?.mode || s.commentMode);
   }
 
   /**
@@ -497,15 +535,15 @@
             // рекомендация, а не запрет платформы, поэтому решение о
             // продолжении принимает человек. Спрашиваем и ждём ответа.
             if (!capR?.canExtend) {
-              log(`Дневной лимит исчерпан (${c.comments}/${cap}). Останавливаюсь.`, "err");
-              await stop(); break;
+              log(`Дневной лимит исчерпан (${c.comments}/${cap}). Останавливаюсь до завтра.`, "err");
+              await stop({ pauseMin: minutesTillMidnight() }); break;
             }
             const step = num(capR?.step, 10);
             log(`Дневной лимит: ${c.comments} из ${cap}. Продолжаем работу или стоп?`, "err");
             const ans = await askContinue(c.comments, cap, step);
             if (ans !== "go") {
               log("Остановлено по вашему решению. Лимит вернётся к норме завтра.");
-              await stop(); break;
+              await stop({ pauseMin: 60 }); break;
             }
             const ex = await sw("SAFE_EXTEND");
             log(`↻ Продолжаю. Лимит поднят на ${num(ex?.step, step)} — продление №${num(ex?.count, 1)} за сегодня.`);
@@ -546,7 +584,7 @@
     const wantFeed = s.source.feed;
     if (!wantSearch && !wantFeed) {
       log("Ни лента, ни поиск не включены в настройках — останавливаюсь.", "err");
-      await stop();
+      await stop({ pauseMin: 30 });
       return true;
     }
     const dueMs = num(s.source.rotateEveryMin, 12) * 60000;
@@ -662,7 +700,7 @@
         const m = err.message || String(err);
         await release(30);
         if (/не подключ|подключи|Telegram ID|закончил/i.test(m)) {
-          log("🔌 " + m, "err"); await stop(); return true;
+          log("🔌 " + m, "err"); await stop({ pauseMin: 10 }); return true;
         }
         log("Модель: " + m, "err");
         await idle(3000);

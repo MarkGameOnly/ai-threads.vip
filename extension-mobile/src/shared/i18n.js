@@ -123,7 +123,7 @@ export const DICT = {
     onb3_s3t: "Что умеет расширение",
     onb3_s3: "«Охотник» ищет клиентов по вашему описанию, «Директ» отвечает в личке, «Посты» показывают, что залетело у других, и переписывают под вас, планировщик публикует по расписанию.",
     onb3_s4t: "Авто или вручную",
-    onb3_s4: "Во вкладке «Очередь» переключатель на две позиции: «Авто» — ИИ пишет и отправляет сам, «Вручную» — показывает текст и ждёт вашего подтверждения.",
+    onb3_s4: "Во вкладке «Очередь» переключатель на две позиции: «Авто» — ИИ пишет и отправляет сам, «Вручную» — показывает текст и ждёт вашего подтверждения. Комментинг запускается сам, как только открыт Threads и подключён кабинет; остановить — кнопкой «⏹ Остановить» в панели.",
     onb3_go: "Начать работу",
     onb3_hint: "Эту памятку всегда можно открыть заново: спросите помощника «как настроить» прямо в чате.",
 
@@ -282,7 +282,7 @@ export const DICT = {
     onb3_s3t: "What the extension does",
     onb3_s3: "Client Hunter finds people from your description, Direct answers in DMs, Posts shows what took off for others and rewrites it in your voice, and the scheduler publishes on a timetable.",
     onb3_s4t: "Auto or manual",
-    onb3_s4: "The “Queue” tab has a two-way switch: “Auto” — the AI writes and sends by itself, “Manual” — it shows you the text and waits for your confirmation.",
+    onb3_s4: "The “Queue” tab has a two-way switch: “Auto” — the AI writes and sends by itself, “Manual” — it shows you the text and waits for your confirmation. Commenting starts by itself once Threads is open and your key is connected; “⏹ Stop” in the panel pauses it.",
     onb3_go: "Start working",
     onb3_hint: "You can bring this back any time: ask the assistant “how do I set this up” right in the chat.",
 
