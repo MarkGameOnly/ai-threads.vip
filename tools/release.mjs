@@ -219,6 +219,8 @@ function cmdBuild() {
     // 2) .zip — папка extension/ + документы; для телефона и Android
     //    рядом кладём сам .crx (ставится «из файла», распаковывать не надо)
     const zipEntries = [...entries, ...docs];
+    const fixesPath = join(ROOT, "FIXES.md");
+    if (existsSync(fixesPath)) zipEntries.push({ name: "FIXES.md", data: readFileSync(fixesPath) });
     if (v.name !== "desktop") {
       zipEntries.push({ name: `extension-${v.name}.crx`, data: crx });
     }
